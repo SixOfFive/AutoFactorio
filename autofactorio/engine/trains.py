@@ -51,6 +51,10 @@ class Train:
         self._intervals: list[tuple[float, float, int]] = []  # (start, end, block_id)
         self.leg_len = 0.0
         self.head_s = 0.0
+        # previous leg's geometry so trailing cars keep flowing across the boundary
+        self._prev_pts: list[tuple[float, float]] = []
+        self._prev_cum: list[float] = []
+        self._prev_len = 0.0
         self.begin_leg(net, 0)
 
     # ---- cargo ------------------------------------------------------------
@@ -62,6 +66,11 @@ class Train:
 
     # ---- leg geometry -----------------------------------------------------
     def begin_leg(self, net: RailNetwork, idx: int) -> None:
+        # remember the leg we're leaving so the wagons can keep trailing onto it
+        if self._pts:
+            self._prev_pts = self._pts
+            self._prev_cum = self._cum
+            self._prev_len = self.leg_len
         self.cur_leg = idx
         leg = self.legs[idx]
         pts: list[tuple[float, float]] = []
@@ -189,12 +198,21 @@ class Train:
 
     # ---- rendering --------------------------------------------------------
     def car_poses(self) -> list[tuple[float, float, float, str]]:
-        """(x, y, angle_deg, kind) for the loco + each wagon, front to back."""
+        """(x, y, angle_deg, kind) for the loco + each wagon, front to back.
+
+        A car whose offset puts it behind the current leg's start trails onto the
+        previous leg's tail, so the train stays one connected unit across station/
+        leg boundaries instead of the wagons piling up at the start point."""
         step = balance.ENTITY_LEN + balance.COUPLING
         poses = []
         for i in range(self.wagons + 1):
-            d = max(0.0, self.head_s - i * step)
-            x, y, ang = _point_at(self._pts, self._cum, d)
+            d = self.head_s - i * step
+            if d >= 0.0:
+                x, y, ang = _point_at(self._pts, self._cum, d)
+            elif self._prev_pts and self._prev_len + d >= 0.0:
+                x, y, ang = _point_at(self._prev_pts, self._prev_cum, self._prev_len + d)
+            else:
+                x, y, ang = _point_at(self._pts, self._cum, 0.0)
             poses.append((x, y, ang, "loco" if i == 0 else "wagon"))
         return poses
 

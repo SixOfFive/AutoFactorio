@@ -325,6 +325,24 @@ def test_cannot_abandon_productive_field():
 
 
 # ---- train-vs-train collision avoidance -----------------------------------
+def test_train_cars_stay_connected_across_legs():
+    import math as _m
+    sim = Simulation(Config())
+    iron = next(p for p in sim.world.discovered_patches() if p.ore == "iron_ore")
+    _build_active(sim, iron.id)
+    t = next(iter(sim.trains.values()))
+    # finish the current leg and depart onto the next one
+    t.head_s = t.leg_len
+    t.depart(sim.net)
+    assert t.head_s == 0.0
+    poses = t.car_poses()
+    # cars must trail back (onto the previous leg), not pile up at the new start
+    spread = _m.dist(poses[0][:2], poses[-1][:2])
+    assert spread > balance.ENTITY_LEN, f"cars bunched at leg start (spread={spread:.2f})"
+    for a, b in zip(poses, poses[1:]):
+        assert _m.dist(a[:2], b[:2]) > balance.ENTITY_LEN * 0.5
+
+
 def test_train_waits_for_obstacle_ahead():
     sim = Simulation(Config())
     iron = next(p for p in sim.world.discovered_patches() if p.ore == "iron_ore")
