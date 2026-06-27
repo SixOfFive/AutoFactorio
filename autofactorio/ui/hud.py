@@ -96,9 +96,9 @@ class Hud:
         ph = len(lines) * 16 + 16
         panel = pygame.Surface((290, ph), pygame.SRCALPHA)
         panel.fill((*PANEL, 225))
-        screen.blit(panel, (w - 300, 72))
+        screen.blit(panel, (8, 72))          # left side; minimap owns the right
         y = 80
         for ln in lines:
             col = AI if ln in ("INVENTORY", "FIELDS") else TEXT
-            screen.blit(self.small.render(ln, True, col), (w - 292, y))
+            screen.blit(self.small.render(ln, True, col), (16, y))
             y += 16

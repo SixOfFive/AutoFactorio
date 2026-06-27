@@ -31,6 +31,8 @@ Real Factorio prevents collisions with **rail signals** and **chain signals** th
 |-------|--------|
 | **Mouse wheel** | Zoom in / out, centered on the cursor |
 | **Right-drag** / **WASD** / **arrows** | Pan the camera |
+| **Click minimap** | Jump the camera to that spot |
+| **M** | Toggle the minimap |
 | **F** | Follow the scout bot |
 | **Space** | Pause / resume the simulation |
 | **`+` / `-`** | Game speed up / down |

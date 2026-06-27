@@ -27,9 +27,10 @@ from .camera import Camera
 from .renderer import Renderer
 from .hud import Hud
 from .console import Console
+from .minimap import Minimap
 
-HINT = ("wheel: zoom   right-drag/WASD: pan   F: follow scout   Space: pause   "
-        "+/-: speed   I: details   L: comms   F5/F9: save/load   Esc: quit")
+HINT = ("wheel: zoom   right-drag/WASD: pan   click minimap: jump   F: follow scout   "
+        "Space: pause   +/-: speed   I: details   L: comms   M: map   F5/F9: save/load   Esc: quit")
 
 SAVE_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))), "saves", "quicksave.json")
@@ -53,6 +54,7 @@ class App:
         big = pygame.font.SysFont("consolas,couriernew,monospace", 22, bold=True)
         self.hud = Hud(font, small, big)
         self.console = Console(small, lines=8)
+        self.minimap = Minimap()
         self.hint_font = small
 
         w, h = self.screen.get_size()
@@ -60,6 +62,7 @@ class App:
         self.follow_scout = False
         self.show_console = True
         self.show_detail = False
+        self.show_minimap = True
         self.running = True
         self.speed_idx = balance.GAME_SPEEDS.index(balance.DEFAULT_GAME_SPEED)
 
@@ -90,6 +93,9 @@ class App:
             elif e.type == pygame.MOUSEWHEEL:
                 mx, my = pygame.mouse.get_pos()
                 self.cam.zoom_at(mx, my, 1.12 ** e.y)
+            elif e.type == pygame.MOUSEBUTTONDOWN and e.button == 1:
+                if self.show_minimap and self.minimap.handle_click(e.pos, self.screen, self.cam, self.sim):
+                    self.follow_scout = False
             elif e.type == pygame.MOUSEMOTION:
                 if e.buttons[2]:                       # right-button drag = grab pan
                     self.cam.pan_pixels(e.rel[0], e.rel[1])
@@ -108,6 +114,8 @@ class App:
             self.show_detail = not self.show_detail
         elif e.key == pygame.K_l:
             self.show_console = not self.show_console
+        elif e.key == pygame.K_m:
+            self.show_minimap = not self.show_minimap
         elif e.key == pygame.K_n:
             self.director.force_decision()
         elif e.key == pygame.K_F5:
@@ -146,6 +154,8 @@ class App:
     def _draw(self) -> None:
         self.renderer.draw(self.screen, self.cam, self.sim)
         self.hud.draw(self.screen, self.sim, self.director, self.show_detail)
+        if self.show_minimap:
+            self.minimap.draw(self.screen, self.cam, self.sim)
         if self.show_console:
             self.console.draw(self.screen, self.sim)
         else:
