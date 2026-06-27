@@ -32,6 +32,8 @@ class Train:
         self.accel = research.train_accel if research else balance.TRAIN_ACCEL
         cap_each = research.wagon_capacity if research else balance.CARGO_WAGON_CAPACITY
         self.capacity = wagons * cap_each
+        self.max_hp = balance.TRAIN_HP
+        self.hp = balance.TRAIN_HP
         self.cargo: dict[str, int] = {}
         self.fuel_seconds = balance.LOCO_START_FUEL * balance.COAL_BURN_SECONDS
         self.speed = 0.0
@@ -116,7 +118,10 @@ class Train:
             self.stalled = True
             return
         self.stalled = False
-        self.speed = min(self.max_speed, self.speed + self.accel * dt)
+        cap = self.max_speed
+        if self.hp < self.max_hp * balance.TRAIN_DAMAGED_THRESHOLD:
+            cap *= balance.TRAIN_DAMAGED_SPEED         # limp while heavily damaged
+        self.speed = min(cap, self.speed + self.accel * dt)
         ds = self.speed * dt
         target = min(self.leg_len, self.head_s + ds)
 

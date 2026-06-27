@@ -36,6 +36,7 @@ SPRITE_NAMES = [
     "locomotive",
     "wagon",
     "scout",
+    "animal",
     "tree", "rock",
 ]
 
@@ -263,6 +264,29 @@ def draw_scout(name) -> pygame.Surface:
     return s
 
 
+def draw_animal(name) -> pygame.Surface:
+    """Top-down critter, facing +X (right). Renderer rotates to heading."""
+    s = _new()
+    body = pygame.Rect(0, 0, 34, 22)
+    body.center = (TILE // 2 - 2, TILE // 2)
+    pygame.draw.ellipse(s, PAL["outline"], body.inflate(3, 3))
+    pygame.draw.ellipse(s, PAL["wood"], body)
+    pygame.draw.ellipse(s, PAL["wood_d"], (body.x, body.centery, body.w, body.h // 2))
+    # legs
+    for lx in (body.x + 7, body.right - 10):
+        pygame.draw.rect(s, PAL["wood_d"], (lx, body.y - 3, 4, 5))
+        pygame.draw.rect(s, PAL["wood_d"], (lx, body.bottom - 2, 4, 5))
+    # head + eye
+    hx, hy = body.right + 2, body.centery
+    pygame.draw.circle(s, PAL["outline"], (hx, hy), 9)
+    pygame.draw.circle(s, PAL["wood"], (hx, hy), 8)
+    pygame.draw.circle(s, (235, 230, 220), (hx + 3, hy - 2), 2)
+    pygame.draw.circle(s, PAL["outline"], (hx + 3, hy - 2), 1)
+    # little horns
+    pygame.draw.line(s, PAL["stone_d"], (hx + 2, hy - 7), (hx + 6, hy - 11), 2)
+    return s
+
+
 def draw_tree(name) -> pygame.Surface:
     s = _new()
     r = _rng(name)
@@ -307,6 +331,7 @@ _DRAW = {
     "locomotive": draw_locomotive,
     "wagon": draw_wagon,
     "scout": draw_scout,
+    "animal": draw_animal,
     "tree": draw_tree,
     "rock": draw_rock,
 }

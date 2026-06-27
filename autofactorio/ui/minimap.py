@@ -72,10 +72,17 @@ class Minimap:
                 x, y = self._w2m(world, poses[0][0], poses[0][1], rect)
                 pygame.draw.circle(screen, (230, 190, 90), (int(x), int(y)), 1)
 
+        # revealed wildlife (don't reveal herds still hidden in fog)
+        for a in sim.animals.list.values():
+            if world.is_explored(int(round(a.x)), int(round(a.y))):
+                x, y = self._w2m(world, a.x, a.y, rect)
+                pygame.draw.circle(screen, (228, 86, 70), (int(x), int(y)), 1)
+
         hx, hy = self._w2m(world, 0, 0, rect)
         pygame.draw.circle(screen, (120, 190, 240), (int(hx), int(hy)), 3)
-        sx, sy = self._w2m(world, sim.scout.x, sim.scout.y, rect)
-        pygame.draw.circle(screen, (120, 220, 235), (int(sx), int(sy)), 2)
+        for r in sim.robots.values():
+            x, y = self._w2m(world, r.x, r.y, rect)
+            pygame.draw.circle(screen, (120, 220, 235), (int(x), int(y)), 2)
 
         # camera viewport outline
         x0, y0, x1, y1 = cam.visible_tile_bounds()

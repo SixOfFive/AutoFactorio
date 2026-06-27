@@ -60,7 +60,8 @@ class Hud:
         tech = f"Tech L{s['tech_level']}" + (f"→{nxt['name']}" if nxt else " (max)")
         stats = (f"⏱ {mm:02d}:{ss:02d}   Fields {s['fields']}   Trains {s['trains']}"
                  f"   Rail {_fmt(s['rail_tiles'])}t   Delivered {_fmt(s['delivered'])}"
-                 f"   Patches {s['discovered_patches']}/{s['claimable_patches']}   {tech}")
+                 f"   Robots {s['robots']}/{s['max_robots']}   Animals {s['animals']}"
+                 f" (killed {_fmt(s['kills'])})   {tech}")
         screen.blit(self.small.render(stats, True, DIM), (12, 34))
 
         # right side: speed + director

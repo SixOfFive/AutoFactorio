@@ -44,12 +44,17 @@ def build_report(sim) -> dict:
             "affordable": sim.can_build_field(p),
         })
 
+    s = sim.stats()
     flags = []
     if any(f.patch.depleted for f in sim.fields.values()):
         flags.append("DEPLETED_FIELDS")
+    if s["damaged_trains"]:
+        flags.append("DAMAGED_TRAINS")
+    if s["animals"] > 8 and s["robots"] < sim.research.max_robots and sim.can_build_robot():
+        flags.append("WILDLIFE_PRESSURE")
     if eco.inv.get("coal", 0) < 150:
         flags.append("LOW_COAL")
-    if sim.stats()["stalled_trains"]:
+    if s["stalled_trains"]:
         flags.append("TRAINS_STALLED_NO_FUEL")
     if not patches:
         flags.append("NO_CLAIMABLE_PATCHES")
@@ -79,6 +84,10 @@ def build_report(sim) -> dict:
         "fields": fields,
         "available_patches": patches,
         "trains": {"count": len(sim.trains),
-                   "stalled": sim.stats()["stalled_trains"]},
+                   "stalled": s["stalled_trains"],
+                   "damaged": s["damaged_trains"]},
+        "robots": {"count": s["robots"], "max": s["max_robots"],
+                   "can_build": sim.can_build_robot()},
+        "animals": s["animals"],
         "flags": flags,
     }

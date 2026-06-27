@@ -43,6 +43,13 @@ def decide(sim, report) -> dict:
                 return field_action(p, f"Securing first {ore.replace('_', ' ')} field "
                                        f"(patch #{p.id}).")
 
+    # 1b. build a robot when wildlife pressures the base or we want a second unit
+    stats = sim.stats()
+    if sim.can_build_robot() and (stats["animals"] > 6 or len(sim.robots) < 2
+                                  or stats["damaged_trains"] > 0):
+        return {"reasoning": "Building a robot for defense / repair / exploration.",
+                "actions": [{"action": "build_robot"}]}
+
     # 2. advance tech whenever the next level is affordable (science accumulates
     #    from surplus, so this fires periodically and compounds the whole economy)
     nxt = sim.research.next_tech()

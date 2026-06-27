@@ -11,11 +11,12 @@ from __future__ import annotations
 import math
 
 from .. import balance
+from .animals import Animals
 from .economy import Economy
 from .mining import MiningField
 from .rail import RailNetwork
 from .research import Research
-from .scout import Scout
+from .robots import Robots
 from .trains import Train, Leg
 from .world import World
 
@@ -33,9 +34,12 @@ class Simulation:
         self.economy = Economy()
         self.net = RailNetwork()
         self.research = Research()
-        self.scout = Scout()
+        self.robots = Robots()
+        self.robots.add(0.0, 0.0, explorer=True)     # robot #0 explores the map
+        self.animals = Animals(config.seed)
         self.fields: dict[int, MiningField] = {}
         self.trains: dict[int, Train] = {}
+        self.kills = 0
         self._fid = 0
         self._tid = 0
         self.time = 0.0
@@ -61,9 +65,10 @@ class Simulation:
             return
         self.time += dt
 
-        for patch in self.scout.update(dt, self.world):
-            self.log(f"Scout discovered a {patch.ore.replace('_', ' ')} patch "
+        for patch in self.robots.update(self, dt):
+            self.log(f"Scout robot discovered a {patch.ore.replace('_', ' ')} patch "
                      f"(#{patch.id}) at ({patch.cx}, {patch.cy}).")
+        self.animals.update(self, dt)
 
         for f in self.fields.values():
             f.update(dt, self.research.drill_mult)
@@ -77,6 +82,52 @@ class Simulation:
             t.update_movement(dt, self.net)
             if t.state == "waiting":
                 self._service_station(t, dt)
+        self._crush_animals()
+
+    # ---- robots / animals -------------------------------------------------
+    @property
+    def scout(self):
+        """The explorer robot (camera-follow + minimap still call this 'scout')."""
+        return self.robots.explorer()
+
+    def can_build_robot(self) -> bool:
+        # a robot must be assembled in stock (a "factory") and under the cap
+        return (self.economy.assemblers >= 1
+                and len(self.robots) < self.research.max_robots
+                and self.economy.inv.get("robot", 0) >= 1)
+
+    def can_replace_robot(self) -> bool:
+        """Animals only retaliate when losing a robot is recoverable - a spare
+        exists, or the base has one assembled and ready."""
+        return len(self.robots) >= 2 or self.can_build_robot()
+
+    def build_robot(self) -> tuple[bool, str]:
+        if len(self.robots) >= self.research.max_robots:
+            return False, f"robot cap reached ({self.research.max_robots})"
+        if self.economy.assemblers < 1:
+            return False, "no factory to deploy a robot"
+        if not self.economy.spend({"robot": 1}):
+            return False, "no robot in stock yet"
+        r = self.robots.add(0.0, 0.0, explorer=False)
+        self.log(f"Deployed robot #{r.id} ({len(self.robots)}/{self.research.max_robots}).")
+        return True, f"robot #{r.id} deployed"
+
+    def _crush_animals(self) -> None:
+        rng2 = balance.TRAIN_CRUSH_RANGE ** 2
+        for t in self.trains.values():
+            if t.state != "moving":
+                continue
+            poses = t.car_poses()
+            if not poses:
+                continue
+            for a in self.animals.near(poses[0][0], poses[0][1], balance.TRAIN_CRUSH_RANGE + balance.ENTITY_LEN):
+                for (cx, cy, _ang, _kind) in poses:
+                    if (a.x - cx) ** 2 + (a.y - cy) ** 2 <= rng2:
+                        self.animals.crush(a.id)
+                        self.kills += 1
+                        t.hp = max(0.0, t.hp - balance.TRAIN_CRUSH_DAMAGE)
+                        self.log(f"Train #{t.id} crushed wildlife (-{int(balance.TRAIN_CRUSH_DAMAGE)} hp).")
+                        break
 
     # ---- station servicing ------------------------------------------------
     def _service_station(self, train: Train, dt: float) -> None:
@@ -353,5 +404,9 @@ class Simulation:
             "claimable_patches": len(self.world.claimable_patches()),
             "coal": self.economy.inv.get("coal", 0),
             "tech_level": self.research.level,
+            "robots": len(self.robots),
             "max_robots": self.research.max_robots,
+            "animals": len(self.animals.list),
+            "kills": self.kills,
+            "damaged_trains": sum(1 for t in self.trains.values() if t.hp < t.max_hp - 0.5),
         }

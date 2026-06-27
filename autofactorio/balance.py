@@ -44,6 +44,7 @@ RECIPES = {
     # economy can actually afford to expand - the whole point is watchable growth.
     "locomotive":    {"in": {"electronic_circuit": 4, "engine_unit": 6, "steel_plate": 12},        "out": {"locomotive": 1},    "time": 2.0},
     "cargo_wagon":   {"in": {"iron_gear": 6, "iron_plate": 12, "steel_plate": 8},                  "out": {"cargo_wagon": 1},   "time": 1.0},
+    "robot":         {"in": {"electronic_circuit": 3, "iron_gear": 4, "steel_plate": 3},           "out": {"robot": 1},         "time": 3.0},
 }
 
 # Friendly display names + which sprite represents an item on the map (if any).
@@ -55,7 +56,7 @@ DISPLAY_NAME = {
     "rail": "Rail", "rail_signal": "Signal", "chain_signal": "Chain signal",
     "train_stop": "Train stop", "electric_drill": "Electric drill", "burner_drill": "Burner drill",
     "stone_furnace": "Furnace", "assembler": "Assembler", "locomotive": "Locomotive",
-    "cargo_wagon": "Cargo wagon", "science_pack": "Science",
+    "cargo_wagon": "Cargo wagon", "science_pack": "Science", "robot": "Robot",
 }
 
 # ---------------------------------------------------------------------------
@@ -132,14 +133,15 @@ STOCK_TARGETS = {
     "electric_drill": 8, "train_stop": 8, "assembler": 2,
     "stone_furnace": 8, "locomotive": 3, "cargo_wagon": 6,
     "science_pack": 120,    # accumulate research currency from surplus production
+    "robot": 3,             # keep robots ready to deploy up to the research cap
 }
 
 # ---------------------------------------------------------------------------
 # World generation
 # ---------------------------------------------------------------------------
 MAP_RADIUS = 160                   # half-size of the square map in tiles
-SCOUT_REVEAL_RADIUS = 9            # tiles revealed around the scout
-SCOUT_SPEED = 6.0                  # tiles/sec
+SCOUT_REVEAL_RADIUS = 9            # tiles revealed around the explorer robot
+SCOUT_SPEED = 6.0                  # tiles/sec (explorer robot)
 PATCH_COUNT = 60                   # ore patches scattered across the map
 PATCH_MIN_RING = 18                # nearest patch distance from HQ (tiles)
 PATCH_RADIUS = (2, 4)             # patch footprint radius range (tiles)
@@ -151,6 +153,46 @@ ORE_WEIGHTS = {"iron_ore": 0.42, "copper_ore": 0.24, "coal": 0.20, "stone": 0.14
 DEFAULT_GAME_SPEED = 1.0
 GAME_SPEEDS = [0.5, 1.0, 2.0, 4.0, 8.0]
 DECISION_INTERVAL = 6.0            # seconds (sim time) between director decisions
+
+# ---------------------------------------------------------------------------
+# Robots (the explorer is robot #0; more are built up to the research cap)
+# ---------------------------------------------------------------------------
+ROBOT_SPEED = 7.0                  # tiles/sec
+ROBOT_HP = 140.0
+ROBOT_REGEN = 5.0                  # hp/sec self-repair when out of melee
+ROBOT_ATTACK = 30.0                # damage per hit to an animal
+ROBOT_ATTACK_RANGE = 2.5          # tiles
+ROBOT_ATTACK_COOLDOWN = 0.7       # sec between hits
+ROBOT_REPAIR_RATE = 14.0          # train HP restored per sec
+ROBOT_FUEL_GATHER_RATE = 2.5      # coal/sec gathered as a slow last resort
+ROBOT_FUEL_CARRY = 80             # coal a robot can carry per fuel run
+ROBOT_HUNT_RADIUS = 70            # only chase animals within this of the robot
+ROBOT_RECIPE = {"electronic_circuit": 5, "iron_gear": 8, "steel_plate": 6}
+
+# ---------------------------------------------------------------------------
+# Animals (herds wander, can spawn in fog, retaliate only if replaceable)
+# ---------------------------------------------------------------------------
+ANIMAL_HP = 55.0
+ANIMAL_SPEED = 3.2                 # tiles/sec wandering
+ANIMAL_CHASE_SPEED = 4.6           # tiles/sec when attacking a robot
+ANIMAL_DPS = 5.0                   # damage/sec to a robot in melee
+ANIMAL_ATTACK_RANGE = 1.8
+ANIMAL_MAX = 40                    # global cap on live animals
+HERD_SIZE = (3, 6)
+HERD_WANDER_RADIUS = 7             # how far an animal drifts from its herd center
+HERD_SPAWN_INTERVAL = 26.0        # sec between herd spawns (sim time)
+HERD_DRIFT = 5.0                   # herd-center wander speed scale
+ANIMAL_AGGRO_RANGE = 12           # herdmates within this join a retaliation
+
+# ---------------------------------------------------------------------------
+# Train health / crushing
+# ---------------------------------------------------------------------------
+TRAIN_HP = 120.0
+TRAIN_CRUSH_DAMAGE = 16.0          # train HP lost per animal crushed
+TRAIN_CRUSH_RANGE = 1.7           # tiles from a car center to crush an animal
+TRAIN_DAMAGED_THRESHOLD = 0.4      # HP fraction below which a train slows
+TRAIN_DAMAGED_SPEED = 0.5          # speed multiplier while heavily damaged
+FUEL_CRITICAL = 60                 # home coal below this triggers robot fuel runs
 
 # ---------------------------------------------------------------------------
 # Tech tree (researched in order; each spends its cost and applies its effect)

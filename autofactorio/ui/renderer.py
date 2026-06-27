@@ -36,7 +36,8 @@ class Renderer:
         self._fields(screen, cam, sim)
         self._home(screen, cam, sim)
         self._trains(screen, cam, sim)
-        self._scout(screen, cam, sim)
+        self._animals(screen, cam, sim)
+        self._robots(screen, cam, sim)
         self._selection(screen, cam, sim, selected)
         self._fog(screen, cam, sim.world)
 
@@ -200,13 +201,28 @@ class Renderer:
                 if t.stalled and kind == "loco":
                     pygame.draw.circle(screen, SIG_RED, (int(sx), int(sy)),
                                        max(3, int(0.5 * cam.zoom)), 2)
-            if loco_pose and cam.zoom >= 6 and t.capacity:
-                self._bar(screen, cam, loco_pose[0], loco_pose[1] - 2.2,
-                          t.cargo_total() / t.capacity, (230, 190, 90))
+            if loco_pose and cam.zoom >= 6:
+                if t.capacity:
+                    self._bar(screen, cam, loco_pose[0], loco_pose[1] - 2.2,
+                              t.cargo_total() / t.capacity, (230, 190, 90))
+                if t.hp < t.max_hp:
+                    self._bar(screen, cam, loco_pose[0], loco_pose[1] - 2.9,
+                              t.hp / t.max_hp, (228, 86, 70))
 
-    def _scout(self, screen, cam, sim):
-        sc = sim.scout
-        self._blit(screen, cam, "scout", sc.x, sc.y, 2.4, angle=-sc.heading)
+    def _robots(self, screen, cam, sim):
+        for r in sim.robots.values():
+            self._blit(screen, cam, "scout", r.x, r.y, 2.4, angle=-r.heading)
+            if cam.zoom >= 6 and r.hp < balance.ROBOT_HP:
+                self._bar(screen, cam, r.x, r.y - 1.8, r.hp / balance.ROBOT_HP, (110, 200, 230))
+
+    def _animals(self, screen, cam, sim):
+        for a in sim.animals.list.values():
+            self._blit(screen, cam, "animal", a.x, a.y, 2.0)
+            if a.state == "attack":
+                sx, sy = cam.world_to_screen(a.x, a.y)
+                if self._on(cam, sx, sy):
+                    pygame.draw.circle(screen, SIG_RED, (int(sx), int(sy)),
+                                       max(3, int(1.1 * cam.zoom)), 1)
 
     # ---- fog of war -------------------------------------------------------
     def _fog(self, screen, cam, world):

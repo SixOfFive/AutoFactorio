@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from autofactorio import balance
 from autofactorio.config import Config
 from autofactorio.engine.simulation import Simulation
+from autofactorio.engine.animals import Animal
 from autofactorio.ai.director import Director
 
 
@@ -142,6 +143,62 @@ def test_load_rebuilds_world_on_seed_mismatch(tmp_path):
     other = Simulation(Config(seed=999))     # different seed
     ok, _ = other.load(path)
     assert ok and other.world.seed == 4242
+
+
+# ---- animals & robots -----------------------------------------------------
+def test_animals_spawn_in_fog():
+    sim = Simulation(Config())
+    _run(sim, seconds=90)
+    assert len(sim.animals.list) > 0
+
+
+def test_animal_dies_from_damage():
+    sim = Simulation(Config())
+    sim.animals.list[1] = Animal(1, 50, 50, herd=0, hp=20)
+    died = sim.animals.hit(1, 25, by_robot=0, retaliate=True)
+    assert died and 1 not in sim.animals.list
+
+
+def test_robot_build_cap_and_replaceable():
+    sim = Simulation(Config())
+    # default: 1 robot, cap 1 -> cannot build or replace
+    assert not sim.can_build_robot()
+    assert not sim.can_replace_robot()
+    sim.research.max_robots = 2
+    sim.economy.inv["robot"] = 2          # assembled and ready to deploy
+    assert sim.can_build_robot() and sim.can_replace_robot()
+    ok, _ = sim.build_robot()
+    assert ok and len(sim.robots) == 2
+    ok, _ = sim.build_robot()              # at cap now
+    assert not ok and len(sim.robots) == 2
+
+
+def test_train_crushes_animal_and_takes_damage():
+    sim = Simulation(Config())
+    iron = next(p for p in sim.world.discovered_patches() if p.ore == "iron_ore")
+    sim.build_field(iron.id)
+    t = next(iter(sim.trains.values()))
+    t.state = "moving"
+    head = t.car_poses()[0]
+    sim.animals.list[1] = Animal(1, head[0], head[1], herd=0)
+    hp_before = t.hp
+    sim._crush_animals()
+    assert 1 not in sim.animals.list
+    assert t.hp < hp_before
+
+
+def test_robot_repairs_damaged_train():
+    sim = Simulation(Config())
+    iron = next(p for p in sim.world.discovered_patches() if p.ore == "iron_ore")
+    sim.build_field(iron.id)
+    t = next(iter(sim.trains.values()))
+    t.hp = 10.0
+    r = sim.robots.explorer()
+    head = t.car_poses()[0]
+    r.x, r.y = head[0], head[1]            # park the robot on the train
+    for _ in range(int(3 / (1 / 60))):
+        sim.robots.update(sim, 1 / 60)
+    assert t.hp > 10.0
 
 
 # ---- director connectivity (offline -> internal -> reconnect) ------------

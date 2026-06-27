@@ -27,6 +27,8 @@ def apply_actions(sim, actions: list[dict]) -> list[str]:
                 ok, msg = sim.expand_drills(a["field_id"], max(1, a.get("count", 2)))
             elif name == "research":
                 ok, msg = sim.research_next()
+            elif name == "build_robot":
+                ok, msg = sim.build_robot()
             elif name == "wait":
                 ok, msg = True, a.get("reason", "holding")
             else:

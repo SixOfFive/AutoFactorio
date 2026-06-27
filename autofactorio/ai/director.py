@@ -46,13 +46,17 @@ Valid actions (use the exact "action" names and integer ids from the report):
 - {"action":"research"}                        research the next tech level (report shows
                                               research.next with name/desc/affordable).
                                               Techs permanently boost drills, trains, smelting, etc.
+- {"action":"build_robot"}                     build a robot (report robots.can_build); robots
+                                              explore, hunt wildlife, repair trains, and gather
+                                              emergency fuel. Max set by Robotics research.
 - {"action":"wait","reason":"..."}            do nothing this turn.
 
 Priorities: abandon ONLY fields with "depleted":true (never scrap a productive field)
 to recover its train; never run out of coal (it fuels trains) - claim a coal patch if
 the NO_COAL_FIELD or LOW_COAL flag is set; secure iron early; expand to affordable
-patches; research the next tech when affordable (it compounds); and scale production.
-Keep 1-3 actions per turn. Output JSON only."""
+patches; research the next tech when affordable (it compounds); build a robot when
+the WILDLIFE_PRESSURE or DAMAGED_TRAINS flag is set and robots.can_build is true; and
+scale production. Keep 1-3 actions per turn. Output JSON only."""
 
 
 class Director:

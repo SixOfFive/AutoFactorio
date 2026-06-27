@@ -93,6 +93,10 @@ docs/ARCHITECTURE.md    design notes
   smelting speed, rail cost, +explorer robots up to 3).
 - LLM director (Golden Eye) with an instant heuristic fallback.
 - Collision-free one-way directed rail (two parallel lanes + one-train-per-block mutex).
+- **Wildlife & robots**: herds spawn in the fog and wander; explorer/hunter robots
+  (max 3, research-gated) cull them, repair damaged trains, and gather emergency
+  fuel as a slow last resort. Trains crush animals (taking damage); animals retaliate
+  only when the base can replace the robot they'd kill. Robots self-repair out of combat.
 - Finite ore patches; depleted fields are auto-retired and their trains salvaged.
 - Progressive fog of war revealed by an autonomous scout.
 - Procedurally-generated CC0 art; trees/rocks scenery.

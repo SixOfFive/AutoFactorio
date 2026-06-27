@@ -48,8 +48,21 @@ def save_game(sim, path: str) -> None:
             {"id": p.id, "reserve": p.reserve, "discovered": p.discovered, "claimed": p.claimed}
             for p in sim.world.patches
         ],
-        "scout": {"x": sim.scout.x, "y": sim.scout.y, "angle": sim.scout.angle,
-                  "radius": sim.scout.radius, "heading": sim.scout.heading},
+        "kills": sim.kills,
+        "robots": {
+            "next_id": sim.robots._rid,
+            "list": [{"id": r.id, "x": r.x, "y": r.y, "heading": r.heading, "hp": r.hp,
+                      "explorer": r.explorer, "carry_coal": r.carry_coal,
+                      "angle": r.angle, "radius": r.radius} for r in sim.robots.values()],
+        },
+        "animals": {
+            "next_aid": sim.animals._aid, "next_hid": sim.animals._hid,
+            "spawn_timer": sim.animals._spawn_timer,
+            "herd_centers": {str(k): v for k, v in sim.animals.herd_centers.items()},
+            "list": [{"id": a.id, "x": a.x, "y": a.y, "herd": a.herd, "hp": a.hp,
+                      "state": a.state, "target_robot": a.target_robot}
+                     for a in sim.animals.list.values()],
+        },
         "economy": {
             "inv": dict(sim.economy.inv),
             "furnaces": sim.economy.furnaces,
@@ -84,7 +97,7 @@ def save_game(sim, path: str) -> None:
             {"id": t.id, "wagons": t.wagons, "cargo": dict(t.cargo),
              "fuel_seconds": t.fuel_seconds, "speed": t.speed, "state": t.state,
              "cur_leg": t.cur_leg, "head_s": t.head_s, "wait_timer": t.wait_timer,
-             "idle_timer": t.idle_timer, "stalled": t.stalled,
+             "idle_timer": t.idle_timer, "stalled": t.stalled, "hp": t.hp,
              "legs": [{"edges": l.edges, "station_id": l.station_id, "wait": list(l.wait)}
                       for l in t.legs]}
             for t in sim.trains.values()
@@ -125,11 +138,37 @@ def load_into(sim, path: str) -> None:
             p.discovered = sp["discovered"]
             p.claimed = sp["claimed"]
 
-    sc = data["scout"]
-    sim.scout.x, sim.scout.y = sc["x"], sc["y"]
-    sim.scout.angle, sim.scout.radius = sc["angle"], sc["radius"]
-    sim.scout.heading = sc["heading"]
-    sim.scout.tx, sim.scout.ty = sim.scout._target()
+    sim.kills = data.get("kills", 0)
+
+    # robots
+    from .robots import Robots, Robot
+    from .animals import Animals, Animal
+    sim.robots = Robots()
+    rdata = data.get("robots", {})
+    for rd in rdata.get("list", []):
+        r = Robot(rd["id"], rd["x"], rd["y"], rd.get("explorer", False))
+        r.heading = rd.get("heading", 0.0)
+        r.hp = rd.get("hp", 100.0)
+        r.carry_coal = rd.get("carry_coal", 0.0)
+        r.angle = rd.get("angle", 0.7)
+        r.radius = rd.get("radius", 18.0)
+        r.tx, r.ty = r._spiral_target()
+        sim.robots.list[r.id] = r
+    sim.robots._rid = rdata.get("next_id", len(sim.robots.list))
+    if not sim.robots.list:                         # always keep an explorer
+        sim.robots.add(0.0, 0.0, explorer=True)
+
+    # animals
+    sim.animals = Animals(sim.world.seed)
+    adata = data.get("animals", {})
+    sim.animals._aid = adata.get("next_aid", 0)
+    sim.animals._hid = adata.get("next_hid", 0)
+    sim.animals._spawn_timer = adata.get("spawn_timer", 0.0)
+    sim.animals.herd_centers = {int(k): list(v) for k, v in adata.get("herd_centers", {}).items()}
+    for ad in adata.get("list", []):
+        sim.animals.list[ad["id"]] = Animal(ad["id"], ad["x"], ad["y"], ad["herd"],
+                                            ad.get("hp", 55.0), ad.get("state", "wander"),
+                                            ad.get("target_robot"))
 
     # economy
     e = data["economy"]
@@ -190,6 +229,7 @@ def load_into(sim, path: str) -> None:
         t.wait_timer = st["wait_timer"]
         t.idle_timer = st["idle_timer"]
         t.stalled = st["stalled"]
+        t.hp = st.get("hp", t.max_hp)
         sim.trains[st["id"]] = t
 
     sim.events = [tuple(ev) for ev in data.get("events", [])]
