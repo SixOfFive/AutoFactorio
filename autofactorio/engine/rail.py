@@ -128,26 +128,32 @@ class RailNetwork:
         # compress collinear runs into corners
         return _corners(pts)
 
-    def _build_lane(self, waypoints: list[tuple[int, int]]) -> list[int]:
-        """Create directed edges along corners, split so no edge exceeds the
-        signal spacing (keeps blocks train-length-bounded). Returns edge ids."""
+    def _add_edge_poly(self, a: int, b: int, points: list[tuple[float, float]]) -> int:
+        pts = [tuple(map(float, p)) for p in points]
+        length = sum(math.dist(pts[i - 1], pts[i]) for i in range(1, len(pts)))
+        eid = self._eid
+        self._eid += 1
+        self.edges[eid] = RailEdge(eid, a, b, pts, length)
+        self.out_edges[a].append(eid)
+        return eid
+
+    def _polyline_to_edges(self, poly: list[tuple[float, float]]) -> list[int]:
+        """Chop a dense (possibly curved) polyline into directed edges of about
+        SIGNAL_SPACING arc-length, one block per edge. Returns edge ids."""
         edge_ids: list[int] = []
-        max_len = float(balance.SIGNAL_SPACING)
-        prev_node = self.add_node(*waypoints[0])
-        for i in range(1, len(waypoints)):
-            x0, y0 = self.nodes[prev_node]
-            x1, y1 = waypoints[i]
-            seg_len = math.dist((x0, y0), (x1, y1))
-            steps = max(1, int(math.ceil(seg_len / max_len)))
-            for s in range(1, steps + 1):
-                t = s / steps
-                nx = _snap(round(x0 + (x1 - x0) * t), balance.RAIL_GRID)
-                ny = _snap(round(y0 + (y1 - y0) * t), balance.RAIL_GRID)
-                nxt = self.add_node(nx, ny)
-                if nxt == prev_node:
-                    continue
-                edge_ids.append(self._add_edge(prev_node, nxt))
-                prev_node = nxt
+        start = self.add_node(*poly[0])
+        chunk = [poly[0]]
+        acc = 0.0
+        for i in range(1, len(poly)):
+            acc += math.dist(poly[i - 1], poly[i])
+            chunk.append(poly[i])
+            if acc >= balance.SIGNAL_SPACING and i < len(poly) - 1:
+                end = self.add_node(*poly[i])
+                edge_ids.append(self._add_edge_poly(start, end, chunk))
+                start, chunk, acc = end, [poly[i]], 0.0
+        if len(chunk) >= 2:
+            end = self.add_node(*poly[-1])
+            edge_ids.append(self._add_edge_poly(start, end, chunk))
         return edge_ids
 
     def _signalize(self, edge_ids: list[int], chain_at_start: bool = False) -> None:
@@ -162,34 +168,44 @@ class RailNetwork:
             self.signals.setdefault(e.a, Signal(e.a, kind, self.node_pos(e.a)))
 
     def build_link(self, home: tuple[int, int], field_pt: tuple[int, int]):
-        """Build two one-way lanes between home and a field.
+        """Build one continuous, smooth, collision-free loop to a field.
 
-        Returns (out_edges, ret_edges, load_station, unload_station). The train
-        loop is: home -> out -> load(field) -> ret -> unload(home) -> repeat.
+        The loop has two one-way lanes joined by wide U-turns at each end, with all
+        corners rounded so trains never turn sharp or snap direction. Two legs:
+          A: home -> (home U-turn) -> out lane -> field   (ends at the LOAD stop)
+          B: field -> (field U-turn) -> return lane -> home (ends at the UNLOAD stop)
+        Because leg B starts exactly where leg A ends (and vice-versa), motion is
+        continuous - no teleport between legs.
+
+        Returns (legA_edges, legB_edges, load_station, unload_station).
         """
         g = balance.RAIL_GRID
-        # perpendicular offset so the return lane runs parallel to the outbound
         dx, dy = field_pt[0] - home[0], field_pt[1] - home[1]
         d = math.hypot(dx, dy) or 1.0
+        ux, uy = dx / d, dy / d                     # unit home->field
+        px, py = -uy, ux                            # perpendicular unit
         off = balance.LANE_OFFSET
-        px = _snap(round(-dy / d * off), g)
-        py = _snap(round(dx / d * off), g)
 
         home_a = (_snap(home[0], g), _snap(home[1], g))
         field_a = (_snap(field_pt[0], g), _snap(field_pt[1], g))
-        home_b = (home_a[0] + px, home_a[1] + py)
-        field_b = (field_a[0] + px, field_a[1] + py)
+        home_b = (_snap(home_a[0] + px * off, g), _snap(home_a[1] + py * off, g))
+        field_b = (_snap(field_a[0] + px * off, g), _snap(field_a[1] + py * off, g))
 
-        out_wp = self._lattice_path(home_a, field_a)
-        ret_wp = self._lattice_path(field_b, home_b)
-        out_edges = self._build_lane(out_wp)
-        ret_edges = self._build_lane(ret_wp)
-        self._signalize(out_edges, chain_at_start=True)
-        self._signalize(ret_edges, chain_at_start=True)
+        out_poly = _round_corners(self._lattice_path(home_a, field_a), balance.CURVE_RADIUS)
+        ret_poly = _round_corners(self._lattice_path(field_b, home_b), balance.CURVE_RADIUS)
+        field_uturn = _arc(field_a, field_b, (ux, uy))      # bulge beyond the field
+        home_uturn = _arc(home_b, home_a, (-ux, -uy))       # bulge behind home
+
+        legA_poly = home_uturn[:-1] + out_poly              # home_b -> home_a -> field_a
+        legB_poly = field_uturn[:-1] + ret_poly             # field_a -> field_b -> home_b
+        legA = self._polyline_to_edges(legA_poly)
+        legB = self._polyline_to_edges(legB_poly)
+        self._signalize(legA, chain_at_start=True)
+        self._signalize(legB, chain_at_start=True)
 
         load = self._add_station("load", field_a, kind="load")
         unload = self._add_station("unload", home_b, kind="unload", is_home=True)
-        return out_edges, ret_edges, load, unload
+        return legA, legB, load, unload
 
     def _add_station(self, base_name: str, pos: tuple[int, int], kind: str,
                      is_home: bool = False) -> Station:
@@ -241,6 +257,54 @@ class RailNetwork:
 
     def total_rail_length(self) -> float:
         return sum(e.length for e in self.edges.values())
+
+
+def _round_corners(pts, radius: float, step: float = 2.0):
+    """Fillet each interior corner with a quadratic Bezier (tangent to both
+    segments) so the polyline has no sharp angles. Trim distance is clamped to
+    half of each adjacent segment so consecutive fillets never overlap."""
+    pts = [tuple(map(float, p)) for p in pts]
+    if len(pts) < 3:
+        return pts
+    out = [pts[0]]
+    for i in range(1, len(pts) - 1):
+        ax, ay = pts[i - 1]
+        bx, by = pts[i]
+        cx, cy = pts[i + 1]
+        l1 = math.hypot(ax - bx, ay - by)
+        l2 = math.hypot(cx - bx, cy - by)
+        if l1 < 1e-6 or l2 < 1e-6:
+            out.append((bx, by))
+            continue
+        dd = min(radius, l1 * 0.5, l2 * 0.5)
+        p1 = (bx + (ax - bx) / l1 * dd, by + (ay - by) / l1 * dd)
+        p2 = (bx + (cx - bx) / l2 * dd, by + (cy - by) / l2 * dd)
+        out.append(p1)
+        n = max(2, int(dd * 2 / step))
+        for k in range(1, n):
+            t = k / n
+            mt = 1 - t
+            out.append((mt * mt * p1[0] + 2 * mt * t * bx + t * t * p2[0],
+                        mt * mt * p1[1] + 2 * mt * t * by + t * t * p2[1]))
+        out.append(p2)
+    out.append(pts[-1])
+    return out
+
+
+def _arc(p_from, p_to, bulge_unit, samples: int = 16):
+    """A 180-degree arc from p_from to p_to bulging toward `bulge_unit`. With the
+    two points offset perpendicular to the lane, the arc's tangents line up with
+    the lanes, giving a smooth turning loop."""
+    cx, cy = (p_from[0] + p_to[0]) * 0.5, (p_from[1] + p_to[1]) * 0.5
+    vfx, vfy = p_from[0] - cx, p_from[1] - cy        # radius vector at p_from
+    r = math.hypot(vfx, vfy)
+    bx, by = bulge_unit
+    pts = []
+    for k in range(samples + 1):
+        a = math.pi * k / samples
+        ca, sa = math.cos(a), math.sin(a)
+        pts.append((cx + vfx * ca + bx * r * sa, cy + vfy * ca + by * r * sa))
+    return pts
 
 
 def _snap(v: float, g: int) -> int:

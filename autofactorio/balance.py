@@ -89,9 +89,10 @@ LOCO_START_FUEL = 3               # coal a freshly-built loco carries
 # ---------------------------------------------------------------------------
 # Rail network
 # ---------------------------------------------------------------------------
-RAIL_GRID = 2                      # rail nodes only on even tile coords
-LANE_OFFSET = 4                    # perpendicular gap between the two one-way lanes (tiles)
-                                   # wide enough that trains on opposite lanes pass clear
+RAIL_GRID = 2                      # rail nodes snap to even tile coords on straights
+LANE_OFFSET = 10                   # gap between the two one-way lanes (tiles); also the
+                                   # diameter of the U-turn loops, so trains never turn sharp
+CURVE_RADIUS = 6                   # corner-rounding radius (tiles); no sharp corners
 SIGNAL_SPACING = 16                # >= MAX_TRAIN_LEN; one block per this many tiles
 OCCUPANCY_PENALTY = 1000           # added to route cost for a locked block
 
