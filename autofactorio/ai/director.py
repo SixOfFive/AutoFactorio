@@ -75,7 +75,9 @@ class Director:
         report = build_report(self.sim)
         self.last_report = report
         self._next_time = self.sim.time + self.interval
-        if self.use_llm:
+        # First move is always the instant heuristic so the base starts building
+        # immediately instead of waiting on the LLM's first (slow) reply.
+        if self.use_llm and self.decisions > 0:
             self._busy = True
             threading.Thread(target=self._worker, args=(report,), daemon=True).start()
         else:
