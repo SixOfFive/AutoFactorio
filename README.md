@@ -6,6 +6,8 @@ You don't place belts or fight biters. You watch an **LLM "logistics director"**
 
 > Independent fan project, not affiliated with Wube Software. All art is procedurally generated and public-domain (CC0) — see `LICENSE`.
 
+![AutoFactorio — the scout's spiral fog reveal, the home factory, and one-way rail loops to four mining fields](docs/screenshot.png)
+
 ---
 
 ## The core loop
@@ -60,7 +62,7 @@ The director talks to an **OpenAI-compatible** endpoint (your LAN's *Golden Eye*
 { "llm": { "url": "http://192.168.15.3:21345", "model": "qwen3:4b", "enabled": true } }
 ```
 
-Each decision turn the game sends a compact JSON report (inventory, stations, idle trains, newly-discovered patches) and the model replies with a validated list of build actions. Thinking is disabled and replies are forced to JSON, matching the SimCity_LLM game-AI setup.
+Each decision turn the game sends a compact JSON report (inventory, stations, idle trains, newly-discovered patches) and the model replies with a validated list of build actions. Thinking is disabled and replies are forced to JSON, matching the SimCity_LLM game-AI setup. The call runs on a worker thread so the game never stalls while the model thinks; if the gateway is unreachable it logs the error and falls back to the heuristic director for that turn. Run with `--fallback` for instant, fully-offline decisions.
 
 ## Project layout
 

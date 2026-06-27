@@ -82,6 +82,7 @@ class Director:
             self._deliver(report, fallback.decide(self.sim, report), "auto")
 
     def _worker(self, report: dict) -> None:
+        # Only the network call runs here; sim is NOT touched off the main thread.
         user = ("Game state report:\n" + json.dumps(report, separators=(",", ":"))
                 + "\n\nReply with JSON only.")
         try:
@@ -90,7 +91,7 @@ class Director:
             self._deliver(report, decision, "llm")
         except LLMError as e:
             self.online = False
-            self._deliver(report, fallback.decide(self.sim, report), "auto",
+            self._deliver(report, None, "llm_failed",
                           note=f"LLM unavailable ({e}); using heuristic director.")
 
     def _deliver(self, report, decision, source, note: str | None = None) -> None:
@@ -106,9 +107,12 @@ class Director:
         report, decision, source, note = res
         self._busy = False
         self.decisions += 1
-        self.source = source
         if note:
             self.sim.log(f"[director] {note}")
+        if source == "llm_failed":            # run the heuristic on the main thread
+            decision = fallback.decide(self.sim, report)
+            source = "auto"
+        self.source = source
         reasoning, actions, errors = validate(decision)
         self.last_reasoning = reasoning or "(no reasoning)"
         tag = "AI" if source == "llm" else "auto"
