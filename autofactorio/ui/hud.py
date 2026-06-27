@@ -68,12 +68,13 @@ class Hud:
         spd_s = self.font.render(spd, True, WARN if sim.paused else TEXT)
         screen.blit(spd_s, (w - spd_s.get_width() - 14, 8))
 
-        src = "LLM" if director.source == "llm" else "AUTO"
-        col = AI if director.source == "llm" else DIM
-        if director.use_llm and not director.online:
-            src = "LLM offline → AUTO"
+        if not director.use_llm:
+            col = DIM
+        elif director.online:
+            col = AI
+        else:
             col = WARN
-        ds = self.small.render(f"Director: {src}", True, col)
+        ds = self.small.render(director.status_text(), True, col)
         screen.blit(ds, (w - ds.get_width() - 14, 38))
 
         if s["stalled_trains"]:

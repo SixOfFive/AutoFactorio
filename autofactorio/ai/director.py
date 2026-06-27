@@ -1,21 +1,28 @@
 """The director: drives expansion decisions, LLM-first with heuristic fallback.
 
 Threading model mirrors SimCity_LLM: the slow LLM call runs on a daemon worker
-thread so the UI never stalls; the resulting actions are applied on the main
-thread during update(). If the gateway errors, this turn falls back to the
-heuristic director and we keep retrying the LLM on later turns.
+thread so the UI never stalls; resulting actions are applied on the main thread.
+
+Connectivity: if the gateway errors (timeout / 5xx / 404 / refused), the director
+switches fully to the INTERNAL heuristic so decisions never block on a dead
+endpoint, then probes the LLM every RETRY_SECONDS on a background thread. On a
+successful probe it resumes the AI director. Transitions are logged to the comms
+console and the live status (with a retry countdown) shows in the HUD.
 """
 
 from __future__ import annotations
 
 import json
 import threading
+import time
 
 from .client import LLMClient, LLMError
 from .report import build_report
 from .schema import validate
 from .apply import apply_actions
 from . import fallback
+
+RETRY_SECONDS = 15.0
 
 SYSTEM_PROMPT = """You are the logistics director of AutoFactorio, a train-network factory game.
 Goal: grow a self-expanding rail empire. Mining fields auto-mine ore; one-way trains
@@ -62,20 +69,26 @@ class Director:
         self._result = None
         self._gen = 0                  # bumped on reset() to discard stale workers
         self._next_time = 2.0          # first decision shortly after start
-        self.online = self.use_llm     # display: is the LLM responding?
+        self.online = self.use_llm     # is the LLM currently responding?
         self.source = "llm" if self.use_llm else "auto"
         self.decisions = 0
         self.last_report: dict | None = None
         self.last_reasoning = "Booting director..."
+        # reconnect probe state
+        self.retry_interval = RETRY_SECONDS
+        self._probe_busy = False
+        self._probe_lock = threading.Lock()
+        self._probe_result: bool | None = None
+        self._next_probe = 0.0         # monotonic clock
 
     # ---- main-thread driver ----------------------------------------------
     def update(self) -> None:
         self._apply_ready()
+        self._check_reconnect()
         if not self._busy and self.sim.time >= self._next_time:
             self._start()
 
     def force_decision(self) -> None:
-        """Trigger a decision now (e.g. user keypress)."""
         if not self._busy:
             self._next_time = self.sim.time
 
@@ -87,13 +100,15 @@ class Director:
         self._busy = False
         self._next_time = self.sim.time + 0.5
 
+    # ---- decision cycle ---------------------------------------------------
     def _start(self) -> None:
         report = build_report(self.sim)
         self.last_report = report
         self._next_time = self.sim.time + self.interval
-        # First move is always the instant heuristic so the base starts building
-        # immediately instead of waiting on the LLM's first (slow) reply.
-        if self.use_llm and self.decisions > 0:
+        # Use the LLM only when enabled AND currently online (and not the very
+        # first move). Otherwise decide instantly with the internal heuristic so
+        # the game never stalls waiting on a dead endpoint.
+        if self.use_llm and self.online and self.decisions > 0:
             self._busy = True
             threading.Thread(target=self._worker, args=(report, self._gen), daemon=True).start()
         else:
@@ -105,14 +120,11 @@ class Director:
                 + "\n\nReply with JSON only.")
         try:
             decision = self.client.chat_json(SYSTEM_PROMPT, user)
-            self.online = True
             if gen == self._gen:
                 self._deliver(report, decision, "llm")
         except LLMError as e:
-            self.online = False
             if gen == self._gen:
-                self._deliver(report, None, "llm_failed",
-                              note=f"LLM unavailable ({e}); using heuristic director.")
+                self._deliver(report, None, "llm_failed", note=str(e))
 
     def _deliver(self, report, decision, source, note: str | None = None) -> None:
         with self._lock:
@@ -127,11 +139,15 @@ class Director:
         report, decision, source, note = res
         self._busy = False
         self.decisions += 1
-        if note:
-            self.sim.log(f"[director] {note}")
-        if source == "llm_failed":            # run the heuristic on the main thread
+
+        if source == "llm":
+            if not self.online:
+                self._set_online()
+        elif source == "llm_failed":
+            self._set_offline(note or "gateway error")
             decision = fallback.decide(self.sim, report)
             source = "auto"
+
         self.source = source
         reasoning, actions, errors = validate(decision)
         self.last_reasoning = reasoning or "(no reasoning)"
@@ -141,3 +157,62 @@ class Director:
             self.sim.log(f"    {r}")
         for e in errors[:3]:
             self.sim.log(f"    ! {e}")
+
+    # ---- connectivity -----------------------------------------------------
+    def _set_offline(self, note: str) -> None:
+        if self.online:
+            self.sim.log(f"[director] LLM unreachable ({_short(note)}). Switched to internal "
+                         f"director; retrying every {int(self.retry_interval)}s.")
+        self.online = False
+        self._next_probe = time.monotonic() + self.retry_interval
+
+    def _set_online(self) -> None:
+        self.online = True
+        self.sim.log("[director] LLM reconnected; resuming AI director.")
+
+    def _check_reconnect(self) -> None:
+        if not self.use_llm or self.online:
+            return
+        with self._probe_lock:
+            result = self._probe_result
+            self._probe_result = None
+        if result is True:
+            self._set_online()
+            return
+        if not self._probe_busy and time.monotonic() >= self._next_probe:
+            self._probe_busy = True
+            threading.Thread(target=self._probe, daemon=True).start()
+
+    def _probe(self) -> None:
+        ok = False
+        try:
+            ok = self.client.ping()
+        except Exception:
+            ok = False
+        with self._probe_lock:
+            self._probe_result = ok
+        if not ok:
+            self._next_probe = time.monotonic() + self.retry_interval
+        self._probe_busy = False
+
+    # ---- status for the HUD ----------------------------------------------
+    @property
+    def probing(self) -> bool:
+        return self._probe_busy
+
+    def seconds_to_retry(self) -> int:
+        return max(0, int(round(self._next_probe - time.monotonic())))
+
+    def status_text(self) -> str:
+        if not self.use_llm:
+            return "Director: AUTO"
+        if self.online:
+            return "Director: LLM"
+        if self._probe_busy:
+            return "Director: AUTO (LLM reconnecting…)"
+        return f"Director: AUTO (LLM retry {self.seconds_to_retry()}s)"
+
+
+def _short(text: str, n: int = 80) -> str:
+    text = " ".join(str(text).split())
+    return text if len(text) <= n else text[:n - 1] + "…"

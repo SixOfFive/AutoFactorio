@@ -144,6 +144,33 @@ def test_load_rebuilds_world_on_seed_mismatch(tmp_path):
     assert ok and other.world.seed == 4242
 
 
+# ---- director connectivity (offline -> internal -> reconnect) ------------
+def test_director_offline_then_reconnect():
+    cfg = Config()                       # llm enabled by default
+    sim = Simulation(cfg)
+    director = Director(sim, cfg)
+    director.decisions = 1               # past the instant-kickstart first move
+
+    n = len(sim.events)
+    director._set_offline("HTTP 502 from gateway")
+    assert director.online is False
+    assert "retry" in director.status_text().lower()
+    assert any("unreachable" in e[1].lower() for e in sim.events[n:])
+
+    # while offline, decisions still flow via the internal heuristic (no thread)
+    director._start()
+    director._apply_ready()
+    assert director.source == "auto"
+    assert not director._busy
+
+    # a successful reconnect probe resumes the AI director
+    n = len(sim.events)
+    director._probe_result = True
+    director._check_reconnect()
+    assert director.online is True
+    assert any("reconnected" in e[1].lower() for e in sim.events[n:])
+
+
 # ---- tech research --------------------------------------------------------
 def test_research_advances_and_applies():
     sim = Simulation(Config())
