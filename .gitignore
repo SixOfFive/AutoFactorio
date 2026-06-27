@@ -1,0 +1,26 @@
+# Python venv & caches
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# Runtime data (per-machine, not source)
+data/
+logs/
+saves/
+*.save.json
+
+# Generated sprites (created on first run by assets/generate_assets.py).
+# They are public-domain by construction and deterministic; no need to commit.
+assets/sprites/*.png
+
+# Local config overrides
+config.json
+config.local.json
+
+# OS cruft
+Thumbs.db
+desktop.ini
+.DS_Store

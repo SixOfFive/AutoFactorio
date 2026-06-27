@@ -1,0 +1,3 @@
+# AutoFactorio runtime dependencies (installed into .venv by play.bat)
+pygame-ce>=2.5.7
+numpy>=2.0

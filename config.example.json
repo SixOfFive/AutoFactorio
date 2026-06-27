@@ -1,0 +1,23 @@
+{
+  "_comment": "Copy to config.json to override defaults. config.json is gitignored. All keys are optional; anything omitted falls back to autofactorio/config.py.",
+
+  "llm": {
+    "url": "http://192.168.15.3:21345",
+    "model": "qwen3:4b",
+    "enabled": true,
+    "timeout_seconds": 60,
+    "decision_interval_seconds": 6,
+    "_note": "Golden Eye OpenAI-compatible gateway. NewsMachine uses :21351 / qwen2.5:14b-instruct; this game defaults to the SimCity_LLM game-AI config (:21345 / qwen3:4b)."
+  },
+
+  "display": {
+    "width": 1600,
+    "height": 900,
+    "fps": 60,
+    "fullscreen": false
+  },
+
+  "world": {
+    "seed": 1337
+  }
+}
