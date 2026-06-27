@@ -56,9 +56,11 @@ class Hud:
         # row 2: stats
         s = sim.stats()
         mm, ss = divmod(int(sim.time), 60)
+        nxt = sim.research.next_tech()
+        tech = f"Tech L{s['tech_level']}" + (f"→{nxt['name']}" if nxt else " (max)")
         stats = (f"⏱ {mm:02d}:{ss:02d}   Fields {s['fields']}   Trains {s['trains']}"
                  f"   Rail {_fmt(s['rail_tiles'])}t   Delivered {_fmt(s['delivered'])}"
-                 f"   Patches {s['discovered_patches']} found / {s['claimable_patches']} open")
+                 f"   Patches {s['discovered_patches']}/{s['claimable_patches']}   {tech}")
         screen.blit(self.small.render(stats, True, DIM), (12, 34))
 
         # right side: speed + director

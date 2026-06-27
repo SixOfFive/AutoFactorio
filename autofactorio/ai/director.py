@@ -36,12 +36,16 @@ Valid actions (use the exact "action" names and integer ids from the report):
 - {"action":"build_furnace","count":N}        deploy furnaces from stock to smelt faster.
 - {"action":"build_assembler","count":N}      deploy assemblers from stock to craft faster.
 - {"action":"expand_drills","field_id":N,"count":N}  add drills to a field.
+- {"action":"research"}                        research the next tech level (report shows
+                                              research.next with name/desc/affordable).
+                                              Techs permanently boost drills, trains, smelting, etc.
 - {"action":"wait","reason":"..."}            do nothing this turn.
 
-Priorities: abandon any field with "depleted":true to recover its train; never run
-out of coal (it fuels trains) - claim a coal patch if the NO_COAL_FIELD or LOW_COAL
-flag is set; secure iron early; then expand to affordable patches and scale
-production. Keep 1-3 actions per turn. Output JSON only."""
+Priorities: abandon ONLY fields with "depleted":true (never scrap a productive field)
+to recover its train; never run out of coal (it fuels trains) - claim a coal patch if
+the NO_COAL_FIELD or LOW_COAL flag is set; secure iron early; expand to affordable
+patches; research the next tech when affordable (it compounds); and scale production.
+Keep 1-3 actions per turn. Output JSON only."""
 
 
 class Director:

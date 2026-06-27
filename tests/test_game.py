@@ -79,6 +79,7 @@ def test_abandon_field_salvages_train():
     sim.build_field(iron.id)
     assert sim.economy.inv.get("locomotive", 0) == locos_before - 1
     assert len(sim.trains) == 1
+    sim.fields[0].patch.reserve = 0               # deplete so it may be abandoned
     ok, msg = sim.abandon_field(0)
     assert ok, msg
     assert len(sim.trains) == 0
@@ -141,6 +142,43 @@ def test_load_rebuilds_world_on_seed_mismatch(tmp_path):
     other = Simulation(Config(seed=999))     # different seed
     ok, _ = other.load(path)
     assert ok and other.world.seed == 4242
+
+
+# ---- tech research --------------------------------------------------------
+def test_research_advances_and_applies():
+    sim = Simulation(Config())
+    tech0 = balance.TECHS[0]
+    for k, v in tech0["cost"].items():
+        sim.economy.inv[k] = v
+    base = sim.research.drill_mult
+    ok, msg = sim.research_next()
+    assert ok, msg
+    assert sim.research.level == 1
+    assert sim.research.drill_mult > base       # tech 0 boosts drills
+
+
+def test_research_lifts_existing_trains():
+    sim = Simulation(Config())
+    iron = next(p for p in sim.world.discovered_patches() if p.ore == "iron_ore")
+    sim.build_field(iron.id)
+    t = next(iter(sim.trains.values()))
+    base_cap = t.capacity
+    for i in range(3):                            # through Cargo Capacity 1
+        for k, v in balance.TECHS[i]["cost"].items():
+            sim.economy.inv[k] = sim.economy.inv.get(k, 0) + v
+        ok, _ = sim.research_next()
+        assert ok
+    assert sim.research.level == 3
+    assert t.capacity > base_cap                  # capacity tech applied to the live train
+
+
+def test_cannot_abandon_productive_field():
+    sim = Simulation(Config())
+    iron = next(p for p in sim.world.discovered_patches() if p.ore == "iron_ore")
+    sim.build_field(iron.id)
+    ok, msg = sim.abandon_field(0)                # patch still has ore
+    assert not ok
+    assert 0 in sim.fields                        # field preserved
 
 
 # ---- block-mutex collision safety ----------------------------------------

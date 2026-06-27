@@ -36,10 +36,10 @@ class MiningField:
     def active(self) -> bool:
         return not self.patch.depleted and self.buffer < self.buffer_cap
 
-    def update(self, dt: float) -> None:
+    def update(self, dt: float, rate_mult: float = 1.0) -> None:
         if self.patch.depleted or self.buffer >= self.buffer_cap:
             return
-        self._accum += self.rate * dt
+        self._accum += self.rate * rate_mult * dt
         whole = int(self._accum)
         if whole <= 0:
             return

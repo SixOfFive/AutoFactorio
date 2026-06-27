@@ -14,6 +14,7 @@ from .. import balance
 from .economy import Economy
 from .mining import MiningField
 from .rail import RailNetwork
+from .research import Research
 from .scout import Scout
 from .trains import Train, Leg
 from .world import World
@@ -31,6 +32,7 @@ class Simulation:
         self.world = World(config.seed)
         self.economy = Economy()
         self.net = RailNetwork()
+        self.research = Research()
         self.scout = Scout()
         self.fields: dict[int, MiningField] = {}
         self.trains: dict[int, Train] = {}
@@ -64,10 +66,11 @@ class Simulation:
                      f"(#{patch.id}) at ({patch.cx}, {patch.cy}).")
 
         for f in self.fields.values():
-            f.update(dt)
+            f.update(dt, self.research.drill_mult)
             if f.patch.depleted and f.id not in self._depleted_announced:
                 self._depleted_announced.add(f.id)
                 self.log(f"Field #{f.id} ({f.patch.ore.replace('_', ' ')}) patch is exhausted.")
+        self.economy.research_furnace_mult = self.research.furnace_mult
         self.economy.update(dt)
 
         for t in self.trains.values():
@@ -142,7 +145,7 @@ class Simulation:
     def field_cost(self, patch, tier: str) -> dict[str, int]:
         drill_item = "electric_drill" if tier == "electric" else "burner_drill"
         dist = math.dist(HOME, (patch.cx, patch.cy))
-        rails_needed = int(dist * 1.15) + 10
+        rails_needed = int((int(dist * 1.15) + 10) * self.research.rail_discount)
         signals_needed = max(2, rails_needed // balance.SIGNAL_SPACING)
         return {
             drill_item: balance.DEFAULT_FIELD_DRILLS,
@@ -192,7 +195,7 @@ class Simulation:
         ]
         tid = self._tid
         self._tid += 1
-        self.trains[tid] = Train(tid, legs, balance.DEFAULT_WAGONS, self.net)
+        self.trains[tid] = Train(tid, legs, balance.DEFAULT_WAGONS, self.net, self.research)
 
         self.economy.spend(costs)
         self.log(f"Built {tier} mining field #{fid} on {patch.ore.replace('_', ' ')} "
@@ -229,7 +232,7 @@ class Simulation:
         ]
         tid = self._tid
         self._tid += 1
-        self.trains[tid] = Train(tid, legs, balance.DEFAULT_WAGONS, self.net)
+        self.trains[tid] = Train(tid, legs, balance.DEFAULT_WAGONS, self.net, self.research)
         self.economy.spend(costs)
         self.log(f"Added a second loop + train #{tid} to field #{field_id}.")
         return True, f"second train #{tid} added to field #{field_id}"
@@ -242,6 +245,9 @@ class Simulation:
         field = self.fields.get(field_id)
         if field is None:
             return False, f"no field #{field_id}"
+        if not field.patch.depleted:
+            # guard against the director scrapping productive fields
+            return False, f"field #{field_id} still has ore; not abandoning"
         removed = 0
         salvaged_wagons = 0
         for tid in list(self.trains.keys()):
@@ -264,6 +270,26 @@ class Simulation:
         self.log(f"Abandoned field #{field_id}; salvaged {removed} locomotive(s) "
                  f"and {salvaged_wagons} wagon(s).")
         return True, f"abandoned field #{field_id} (salvaged {removed} train(s))"
+
+    def research_next(self) -> tuple[bool, str]:
+        """Research the next tech if its cost is in stock; applies the effect and
+        propagates the new tuning to existing trains and the economy."""
+        tech = self.research.next_tech()
+        if tech is None:
+            return False, "all techs researched"
+        if not self.economy.have(tech["cost"]):
+            missing = {k: v for k, v in tech["cost"].items() if self.economy.inv.get(k, 0) < v}
+            return False, f"insufficient for research '{tech['name']}': need {missing}"
+        self.economy.spend(tech["cost"])
+        self.research.apply(tech)
+        # propagate to existing trains
+        for t in self.trains.values():
+            t.max_speed = self.research.train_speed
+            t.accel = self.research.train_accel
+            t.capacity = t.wagons * self.research.wagon_capacity
+        self.economy.research_furnace_mult = self.research.furnace_mult
+        self.log(f"Researched '{tech['name']}' (L{self.research.level}): {tech['desc']}.")
+        return True, f"researched {tech['name']}"
 
     def build_assembler(self, n: int = 1) -> tuple[bool, str]:
         if not self.economy.spend({"assembler": n}):
@@ -326,4 +352,6 @@ class Simulation:
             "discovered_patches": len(self.world.discovered_patches()),
             "claimable_patches": len(self.world.claimable_patches()),
             "coal": self.economy.inv.get("coal", 0),
+            "tech_level": self.research.level,
+            "max_robots": self.research.max_robots,
         }

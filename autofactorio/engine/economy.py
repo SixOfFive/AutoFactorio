@@ -27,6 +27,7 @@ _SMELT_ORDER = ["iron_plate", "copper_plate", "steel_plate"]
 _BUILD_ORDER = [
     "stone_furnace", "rail", "rail_signal", "chain_signal",
     "train_stop", "electric_drill", "assembler", "cargo_wagon", "locomotive",
+    "science_pack",     # made from surplus circuits/plates; fuels research
 ]
 _IRON_RESERVE_FOR_STEEL = 40       # keep this many iron plates before making steel
 _SMELT_BANK_CAP = 64.0             # max furnace-seconds banked
@@ -43,6 +44,7 @@ class Economy:
         self.assemblers = balance.HOME_START["assemblers"]
         self._smelt_bank = 0.0
         self._craft_bank = 0.0
+        self.research_furnace_mult = 1.0    # lifted by Electric Smelting research
         self.total_smelted = 0
         self.total_crafted = 0
 
@@ -68,7 +70,8 @@ class Economy:
     # ---- production -------------------------------------------------------
     def update(self, dt: float) -> None:
         self._smelt_bank = min(self._smelt_bank
-                               + self.furnaces * balance.FURNACE_SPEED[self.furnace_tier] * dt,
+                               + self.furnaces * balance.FURNACE_SPEED[self.furnace_tier]
+                               * self.research_furnace_mult * dt,
                                _SMELT_BANK_CAP)
         self._smelt()
         self._craft_bank = min(self._craft_bank + self.assemblers * dt, _CRAFT_BANK_CAP)

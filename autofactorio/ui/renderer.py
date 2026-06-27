@@ -192,7 +192,7 @@ class Renderer:
                 if not self._on(cam, sx, sy):
                     continue
                 lp = max(2, int(length * cam.zoom))
-                wp = max(2, int(2.6 * cam.zoom))
+                wp = max(2, int(balance.ENTITY_WIDTH * cam.zoom))
                 sprite = "locomotive" if kind == "loco" else "wagon"
                 base = pygame.transform.smoothscale(self.a.base[sprite], (lp, wp))
                 img = pygame.transform.rotate(base, -ang)

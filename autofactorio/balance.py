@@ -30,6 +30,8 @@ RECIPES = {
     "copper_cable":       {"in": {"copper_plate": 1},                      "out": {"copper_cable": 2},       "time": 0.5},
     "electronic_circuit": {"in": {"iron_plate": 1, "copper_cable": 3},     "out": {"electronic_circuit": 1}, "time": 0.5},
     "engine_unit":        {"in": {"iron_gear": 1, "steel_plate": 1, "iron_plate": 2}, "out": {"engine_unit": 1}, "time": 2.0},
+    # research currency: the factory makes science from surplus; research spends it
+    "science_pack":       {"in": {"electronic_circuit": 1, "iron_plate": 1, "copper_plate": 1}, "out": {"science_pack": 1}, "time": 1.0},
     # buildables
     "rail":          {"in": {"iron_stick": 1, "steel_plate": 1, "stone": 1},                       "out": {"rail": 2},          "time": 0.5},
     "rail_signal":   {"in": {"electronic_circuit": 1, "iron_plate": 5},                            "out": {"rail_signal": 1},   "time": 0.5},
@@ -53,7 +55,7 @@ DISPLAY_NAME = {
     "rail": "Rail", "rail_signal": "Signal", "chain_signal": "Chain signal",
     "train_stop": "Train stop", "electric_drill": "Electric drill", "burner_drill": "Burner drill",
     "stone_furnace": "Furnace", "assembler": "Assembler", "locomotive": "Locomotive",
-    "cargo_wagon": "Cargo wagon",
+    "cargo_wagon": "Cargo wagon", "science_pack": "Science",
 }
 
 # ---------------------------------------------------------------------------
@@ -73,9 +75,11 @@ CARGO_WAGON_CAPACITY = 2000        # items per wagon (single int, no stacks)
 DEFAULT_WAGONS = 2                 # per train
 TRAIN_MAX_SPEED = 8.0              # tiles/sec
 TRAIN_ACCEL = 4.0                 # tiles/sec^2
-ENTITY_LEN = 6                     # loco / wagon length in tiles
+ENTITY_LEN = 4                     # loco / wagon length in tiles (small enough that
+                                   # trains on the two parallel lanes clear each other)
+ENTITY_WIDTH = 1.5                 # drawn car width in tiles
 COUPLING = 1                       # tile gap between cars
-MAX_TRAIN_LEN = 20                 # 1 loco + 2 wagons + couplings (used for block spacing)
+MAX_TRAIN_LEN = 15                 # 1 loco + 2 wagons + couplings (used for block spacing)
 
 COAL_BURN_SECONDS = 6.67           # run-seconds added per 1 coal
 LOCO_FUEL_SLOTS = 3                # max coal a loco holds
@@ -85,8 +89,9 @@ LOCO_START_FUEL = 3               # coal a freshly-built loco carries
 # Rail network
 # ---------------------------------------------------------------------------
 RAIL_GRID = 2                      # rail nodes only on even tile coords
-LANE_OFFSET = 2                    # perpendicular gap between the two one-way lanes (tiles)
-SIGNAL_SPACING = 20                # >= MAX_TRAIN_LEN; one block per this many tiles
+LANE_OFFSET = 4                    # perpendicular gap between the two one-way lanes (tiles)
+                                   # wide enough that trains on opposite lanes pass clear
+SIGNAL_SPACING = 16                # >= MAX_TRAIN_LEN; one block per this many tiles
 OCCUPANCY_PENALTY = 1000           # added to route cost for a locked block
 
 # ---------------------------------------------------------------------------
@@ -126,6 +131,7 @@ STOCK_TARGETS = {
     "rail": 250, "rail_signal": 30, "chain_signal": 12,
     "electric_drill": 8, "train_stop": 8, "assembler": 2,
     "stone_furnace": 8, "locomotive": 3, "cargo_wagon": 6,
+    "science_pack": 120,    # accumulate research currency from surplus production
 }
 
 # ---------------------------------------------------------------------------
@@ -145,3 +151,31 @@ ORE_WEIGHTS = {"iron_ore": 0.42, "copper_ore": 0.24, "coal": 0.20, "stone": 0.14
 DEFAULT_GAME_SPEED = 1.0
 GAME_SPEEDS = [0.5, 1.0, 2.0, 4.0, 8.0]
 DECISION_INTERVAL = 6.0            # seconds (sim time) between director decisions
+
+# ---------------------------------------------------------------------------
+# Tech tree (researched in order; each spends its cost and applies its effect)
+# ---------------------------------------------------------------------------
+BASE_MAX_ROBOTS = 1                # explorer robots before Robotics research
+
+TECHS = [
+    {"name": "Mining Productivity 1", "cost": {"science_pack": 10},
+     "effect": {"drill_mult": 1.5}, "desc": "+50% drill output"},
+    {"name": "Train Braking 1", "cost": {"science_pack": 14},
+     "effect": {"train_speed": 1.25, "train_accel": 1.3}, "desc": "faster trains"},
+    {"name": "Cargo Capacity 1", "cost": {"science_pack": 18},
+     "effect": {"wagon_capacity": 1.5}, "desc": "+50% wagon capacity"},
+    {"name": "Electric Smelting", "cost": {"science_pack": 24},
+     "effect": {"furnace_mult": 1.5}, "desc": "+50% smelting speed"},
+    {"name": "Rail Engineering", "cost": {"science_pack": 30},
+     "effect": {"rail_discount": 0.8}, "desc": "-20% rail cost per link"},
+    {"name": "Mining Productivity 2", "cost": {"science_pack": 40},
+     "effect": {"drill_mult": 1.5}, "desc": "+50% drill output"},
+    {"name": "Robotics 1", "cost": {"science_pack": 50},
+     "effect": {"max_robots": 1}, "desc": "+1 explorer robot"},
+    {"name": "Cargo Capacity 2", "cost": {"science_pack": 64},
+     "effect": {"wagon_capacity": 1.5}, "desc": "+50% wagon capacity"},
+    {"name": "Train Braking 2", "cost": {"science_pack": 80},
+     "effect": {"train_speed": 1.25, "train_accel": 1.3}, "desc": "faster trains"},
+    {"name": "Robotics 2", "cost": {"science_pack": 100},
+     "effect": {"max_robots": 1}, "desc": "+1 explorer robot (max 3)"},
+]

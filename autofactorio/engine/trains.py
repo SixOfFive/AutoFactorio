@@ -23,11 +23,15 @@ class Leg:
 
 
 class Train:
-    def __init__(self, tid: int, legs: list[Leg], wagons: int, net: RailNetwork):
+    def __init__(self, tid: int, legs: list[Leg], wagons: int, net: RailNetwork, research=None):
         self.id = tid
         self.legs = legs
         self.wagons = wagons
-        self.capacity = wagons * balance.CARGO_WAGON_CAPACITY
+        # per-train tuning (lifted by research); fall back to base balance numbers
+        self.max_speed = research.train_speed if research else balance.TRAIN_MAX_SPEED
+        self.accel = research.train_accel if research else balance.TRAIN_ACCEL
+        cap_each = research.wagon_capacity if research else balance.CARGO_WAGON_CAPACITY
+        self.capacity = wagons * cap_each
         self.cargo: dict[str, int] = {}
         self.fuel_seconds = balance.LOCO_START_FUEL * balance.COAL_BURN_SECONDS
         self.speed = 0.0
@@ -112,7 +116,7 @@ class Train:
             self.stalled = True
             return
         self.stalled = False
-        self.speed = min(balance.TRAIN_MAX_SPEED, self.speed + balance.TRAIN_ACCEL * dt)
+        self.speed = min(self.max_speed, self.speed + self.accel * dt)
         ds = self.speed * dt
         target = min(self.leg_len, self.head_s + ds)
 

@@ -58,6 +58,7 @@ def save_game(sim, path: str) -> None:
             "total_smelted": sim.economy.total_smelted,
             "total_crafted": sim.economy.total_crafted,
         },
+        "research": sim.research.to_dict(),
         "net": {
             "counters": {"nid": net._nid, "eid": net._eid, "bid": net._bid, "sid": net._sid},
             "nodes": {str(k): list(v) for k, v in net.nodes.items()},
@@ -140,6 +141,9 @@ def load_into(sim, path: str) -> None:
     sim.economy.assemblers = e["assemblers"]
     sim.economy.total_smelted = e["total_smelted"]
     sim.economy.total_crafted = e["total_crafted"]
+    if "research" in data:
+        sim.research.from_dict(data["research"])
+    sim.economy.research_furnace_mult = sim.research.furnace_mult
 
     # rail network
     net = sim.net
@@ -176,7 +180,7 @@ def load_into(sim, path: str) -> None:
     sim.trains = {}
     for st in data["trains"]:
         legs = [Leg(l["edges"], l["station_id"], tuple(l["wait"])) for l in st["legs"]]
-        t = Train(st["id"], legs, st["wagons"], net)
+        t = Train(st["id"], legs, st["wagons"], net, sim.research)
         t.begin_leg(net, st["cur_leg"])
         t.head_s = st["head_s"]
         t.state = st["state"]

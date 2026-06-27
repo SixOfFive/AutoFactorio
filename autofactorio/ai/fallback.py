@@ -43,6 +43,13 @@ def decide(sim, report) -> dict:
                 return field_action(p, f"Securing first {ore.replace('_', ' ')} field "
                                        f"(patch #{p.id}).")
 
+    # 2. advance tech whenever the next level is affordable (science accumulates
+    #    from surplus, so this fires periodically and compounds the whole economy)
+    nxt = sim.research.next_tech()
+    if nxt is not None and eco.have(nxt["cost"]):
+        return {"reasoning": f"Researching {nxt['name']} ({nxt['desc']}).",
+                "actions": [{"action": "research"}]}
+
     # 3. expand to the nearest affordable patch, diversifying ore types
     affordable = [p for p in patches if sim.can_build_field(p)]
     if affordable:

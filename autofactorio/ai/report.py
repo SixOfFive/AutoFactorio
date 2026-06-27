@@ -59,9 +59,16 @@ def build_report(sim) -> dict:
     if "iron_ore" not in ore_fields:
         flags.append("NO_IRON_FIELD")
 
+    nxt = sim.research.next_tech()
+    research = {"level": sim.research.level}
+    if nxt is not None:
+        research["next"] = {"name": nxt["name"], "desc": nxt["desc"],
+                            "affordable": eco.have(nxt["cost"])}
+
     return {
         "time_s": int(sim.time),
         "inventory": inv,
+        "research": research,
         "production": {
             "furnaces": eco.furnaces,
             "assemblers": eco.assemblers,

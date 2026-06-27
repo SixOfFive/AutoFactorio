@@ -25,6 +25,8 @@ def apply_actions(sim, actions: list[dict]) -> list[str]:
                 ok, msg = sim.build_furnace(max(1, a.get("count", 1)))
             elif name == "expand_drills":
                 ok, msg = sim.expand_drills(a["field_id"], max(1, a.get("count", 2)))
+            elif name == "research":
+                ok, msg = sim.research_next()
             elif name == "wait":
                 ok, msg = True, a.get("reason", "holding")
             else:

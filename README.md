@@ -88,6 +88,9 @@ docs/ARCHITECTURE.md    design notes
 ## Features
 
 - Self-expanding economy: mine → one-way train haul → smelt → craft → expand.
+- **Tech research**: the factory makes science from surplus; the director researches
+  levels that compound the economy (drill output, train speed, wagon capacity,
+  smelting speed, rail cost, +explorer robots up to 3).
 - LLM director (Golden Eye) with an instant heuristic fallback.
 - Collision-free one-way directed rail (two parallel lanes + one-train-per-block mutex).
 - Finite ore patches; depleted fields are auto-retired and their trains salvaged.
