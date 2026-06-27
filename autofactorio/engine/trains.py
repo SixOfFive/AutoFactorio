@@ -131,18 +131,23 @@ class Train:
             self.fuel_seconds -= dt
         self.head_s = target
 
-        # acquire blocks now under the body; release ones we left
+        # acquire blocks now under the body; only record ones we actually own,
+        # then release any previously-held block no longer under us.
         body = self._body_blocks()
+        owned: set[int] = set()
         for bid in body:
             blk = net.blocks.get(bid)
-            if blk is not None and blk.occupant in (None, self.id):
+            if blk is None:
+                continue
+            if blk.occupant in (None, self.id):
                 blk.occupant = self.id
+                owned.add(bid)
         for bid in list(self.locked):
-            if bid not in body:
+            if bid not in owned:
                 blk = net.blocks.get(bid)
                 if blk is not None and blk.occupant == self.id:
                     blk.occupant = None
-        self.locked = set(body)
+        self.locked = owned
 
         if self.head_s >= self.leg_len - 1e-6:
             self.head_s = self.leg_len

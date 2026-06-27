@@ -51,19 +51,19 @@ class Renderer:
         screen.blit(img, img.get_rect(center=(sx, sy)))
 
     # ---- layers -----------------------------------------------------------
+    _ORE_SPRITE = {"iron_ore": "ore_iron", "copper_ore": "ore_copper",
+                   "coal": "ore_coal", "stone": "ore_stone"}
+
     def _patches(self, screen, cam, sim):
         for p in sim.world.patches:
             if not p.discovered:
                 continue
             tiles = p.radius * 2 + 1
-            name = f"ore_{p.ore.split('_')[0]}" if p.ore != "coal" else "ore_coal"
-            if p.ore == "iron_ore":
-                name = "ore_iron"
-            elif p.ore == "copper_ore":
-                name = "ore_copper"
-            elif p.ore == "stone":
-                name = "ore_stone"
-            self._blit(screen, cam, name, p.cx, p.cy, tiles)
+            if p.depleted:
+                self._blit(screen, cam, "rock", p.cx, p.cy, tiles)   # spent ground
+            else:
+                self._blit(screen, cam, self._ORE_SPRITE.get(p.ore, "ore_iron"),
+                           p.cx, p.cy, tiles)
 
     def _rails(self, screen, cam, sim):
         zoom = cam.zoom
@@ -118,6 +118,23 @@ class Renderer:
                 gy = (i // cols) - 0.5
                 self._blit(screen, cam, "mining_drill",
                            p.cx + gx * 1.6, p.cy + gy * 1.6, 1.5)
+            if cam.zoom >= 6 and p.max_reserve:
+                self._bar(screen, cam, p.cx, p.cy - p.radius - 1.2,
+                          p.reserve / p.max_reserve, (110, 200, 120))
+
+    def _bar(self, screen, cam, wx, wy, frac, color):
+        """A small world-anchored progress bar (reserve, cargo, ...)."""
+        frac = max(0.0, min(1.0, frac))
+        sx, sy = cam.world_to_screen(wx, wy)
+        if not self._on(cam, sx, sy):
+            return
+        w = max(14, int(2.6 * cam.zoom))
+        h = max(3, int(0.28 * cam.zoom))
+        x = int(sx - w / 2)
+        y = int(sy - h / 2)
+        pygame.draw.rect(screen, (18, 20, 26), (x - 1, y - 1, w + 2, h + 2))
+        pygame.draw.rect(screen, (60, 64, 72), (x, y, w, h))
+        pygame.draw.rect(screen, color, (x, y, int(w * frac), h))
 
     def _home(self, screen, cam, sim):
         self._blit(screen, cam, "hq", 0, 0, 4.5)
@@ -134,8 +151,11 @@ class Renderer:
     def _trains(self, screen, cam, sim):
         length = balance.ENTITY_LEN
         for t in sim.trains.values():
+            loco_pose = None
             for (wx, wy, ang, kind) in t.car_poses():
                 sx, sy = cam.world_to_screen(wx, wy)
+                if kind == "loco":
+                    loco_pose = (wx, wy)
                 if not self._on(cam, sx, sy):
                     continue
                 lp = max(2, int(length * cam.zoom))
@@ -147,6 +167,9 @@ class Renderer:
                 if t.stalled and kind == "loco":
                     pygame.draw.circle(screen, SIG_RED, (int(sx), int(sy)),
                                        max(3, int(0.5 * cam.zoom)), 2)
+            if loco_pose and cam.zoom >= 6 and t.capacity:
+                self._bar(screen, cam, loco_pose[0], loco_pose[1] - 2.2,
+                          t.cargo_total() / t.capacity, (230, 190, 90))
 
     def _scout(self, screen, cam, sim):
         sc = sim.scout

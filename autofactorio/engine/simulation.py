@@ -41,6 +41,7 @@ class Simulation:
         self.paused = False
         self.events: list[tuple[float, str]] = []
         self.delivered_total = 0
+        self._depleted_announced: set[int] = set()
         self.log("Base online. Scout dispatched to map the frontier.")
 
     # ---- logging ----------------------------------------------------------
@@ -64,6 +65,9 @@ class Simulation:
 
         for f in self.fields.values():
             f.update(dt)
+            if f.patch.depleted and f.id not in self._depleted_announced:
+                self._depleted_announced.add(f.id)
+                self.log(f"Field #{f.id} ({f.patch.ore.replace('_', ' ')}) patch is exhausted.")
         self.economy.update(dt)
 
         for t in self.trains.values():
@@ -196,24 +200,70 @@ class Simulation:
         return True, f"field #{fid} on patch #{patch_id} ({patch.ore})"
 
     def add_train(self, field_id: int) -> tuple[bool, str]:
+        """Add throughput to a field by building a SECOND independent parallel
+        loop (its own one-way lanes + stations + train) to the same patch. Keeping
+        loops dedicated means no shared blocks, so it stays collision/deadlock-free."""
         field = self.fields.get(field_id)
         if field is None:
             return False, f"no field #{field_id}"
-        costs = {"locomotive": 1, "cargo_wagon": balance.DEFAULT_WAGONS}
+        patch = field.patch
+        dist = math.dist(HOME, (patch.cx, patch.cy))
+        rails_needed = int(dist * 1.15) + 10
+        signals_needed = max(2, rails_needed // balance.SIGNAL_SPACING)
+        costs = {
+            "train_stop": 2,
+            "rail": rails_needed,
+            "rail_signal": signals_needed,
+            "locomotive": 1,
+            "cargo_wagon": balance.DEFAULT_WAGONS,
+        }
         if not self.economy.have(costs):
-            return False, "insufficient rolling stock"
-        # reuse an existing train's legs for this field
-        template = next((t for t in self.trains.values()
-                         if self.net.stations[t.legs[0].station_id].field_id == field_id), None)
-        if template is None:
-            return False, "no route to clone for that field"
-        legs = [Leg(list(l.edges), l.station_id, l.wait) for l in template.legs]
+            return False, "insufficient materials for a second loop"
+        out_e, ret_e, load_st, unload_st = self.net.build_link(HOME, (patch.cx, patch.cy))
+        load_st.field_id = field_id
+        load_st.name = f"{patch.ore}-{field_id}-load2"
+        unload_st.name = f"home-{field_id}-unload2"
+        legs = [
+            Leg(out_e, load_st.id, ("full_cargo",)),
+            Leg(ret_e, unload_st.id, ("empty_cargo",)),
+        ]
         tid = self._tid
         self._tid += 1
         self.trains[tid] = Train(tid, legs, balance.DEFAULT_WAGONS, self.net)
         self.economy.spend(costs)
-        self.log(f"Added train #{tid} to field #{field_id}.")
-        return True, f"train #{tid} added to field #{field_id}"
+        self.log(f"Added a second loop + train #{tid} to field #{field_id}.")
+        return True, f"second train #{tid} added to field #{field_id}"
+
+    def abandon_field(self, field_id: int) -> tuple[bool, str]:
+        """Retire a field (usually a depleted patch): remove its trains, salvage
+        their locomotives + wagons back to stock, and release any block locks they
+        held. Rails are left in place. The patch frees up for re-claim if it still
+        has reserve."""
+        field = self.fields.get(field_id)
+        if field is None:
+            return False, f"no field #{field_id}"
+        removed = 0
+        salvaged_wagons = 0
+        for tid in list(self.trains.keys()):
+            t = self.trains[tid]
+            st = self.net.stations.get(t.legs[0].station_id)
+            if st is not None and st.field_id == field_id:
+                for bid in list(t.locked):
+                    blk = self.net.blocks.get(bid)
+                    if blk is not None and blk.occupant == t.id:
+                        blk.occupant = None
+                self.economy.add("locomotive", 1)
+                self.economy.add("cargo_wagon", t.wagons)
+                salvaged_wagons += t.wagons
+                del self.trains[tid]
+                removed += 1
+        del self.fields[field_id]
+        self._depleted_announced.discard(field_id)
+        if not field.patch.depleted:
+            field.patch.claimed = False           # reclaimable if ore remains
+        self.log(f"Abandoned field #{field_id}; salvaged {removed} locomotive(s) "
+                 f"and {salvaged_wagons} wagon(s).")
+        return True, f"abandoned field #{field_id} (salvaged {removed} train(s))"
 
     def build_assembler(self, n: int = 1) -> tuple[bool, str]:
         if not self.economy.spend({"assembler": n}):

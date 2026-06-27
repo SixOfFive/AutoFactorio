@@ -1,0 +1,122 @@
+"""Pytest suite for AutoFactorio (headless; no window required).
+
+Run:  .venv\\Scripts\\python -m pytest -q
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+
+os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from autofactorio import balance
+from autofactorio.config import Config
+from autofactorio.engine.simulation import Simulation
+from autofactorio.ai.director import Director
+
+
+def _run(sim, director=None, seconds=60, dt=1 / 60):
+    for _ in range(int(seconds / dt)):
+        sim.tick(dt)
+        if director is not None:
+            director.update()
+
+
+# ---- world / bootstrap ----------------------------------------------------
+def test_starter_patches_discovered():
+    sim = Simulation(Config())
+    disc = sim.world.discovered_patches()
+    ores = {p.ore for p in disc}
+    assert "iron_ore" in ores and "coal" in ores
+
+
+# ---- core economic loop ---------------------------------------------------
+def test_loop_delivers_smelts_crafts():
+    sim = Simulation(Config())
+    iron = next(p for p in sim.world.discovered_patches() if p.ore == "iron_ore")
+    ok, msg = sim.build_field(iron.id)
+    assert ok, msg
+    _run(sim, seconds=180)
+    assert sim.delivered_total > 0
+    assert sim.economy.total_smelted > 0
+    assert sim.economy.total_crafted > 0
+
+
+def test_production_runs_at_60fps():
+    """Regression: banked work must let recipes complete despite tiny per-tick budget."""
+    eco = Simulation(Config()).economy
+    eco.inv["iron_ore"] = 500
+    before = eco.inv.get("iron_plate", 0)
+    for _ in range(600):           # 10s at 60fps
+        eco.update(1 / 60)
+    assert eco.total_smelted > 0
+    assert eco.inv.get("iron_plate", 0) != before
+
+
+# ---- autonomous director --------------------------------------------------
+def test_network_self_expands():
+    cfg = Config()
+    cfg.llm.enabled = False
+    sim = Simulation(cfg)
+    director = Director(sim, cfg)
+    _run(sim, director, seconds=600)
+    s = sim.stats()
+    assert s["fields"] >= 3
+    assert s["delivered"] > 500
+    assert s["rail_tiles"] > 60
+    assert s["stalled_trains"] == 0
+    assert "coal" in {f.patch.ore for f in sim.fields.values()}
+
+
+# ---- depleted-field lifecycle --------------------------------------------
+def test_abandon_field_salvages_train():
+    sim = Simulation(Config())
+    iron = next(p for p in sim.world.discovered_patches() if p.ore == "iron_ore")
+    locos_before = sim.economy.inv.get("locomotive", 0)
+    sim.build_field(iron.id)
+    assert sim.economy.inv.get("locomotive", 0) == locos_before - 1
+    assert len(sim.trains) == 1
+    ok, msg = sim.abandon_field(0)
+    assert ok, msg
+    assert len(sim.trains) == 0
+    assert len(sim.fields) == 0
+    # locomotive + wagons salvaged back to stock
+    assert sim.economy.inv.get("locomotive", 0) == locos_before
+    assert sim.economy.inv.get("cargo_wagon", 0) >= balance.DEFAULT_WAGONS
+
+
+def test_depleted_patch_is_auto_abandoned():
+    cfg = Config()
+    cfg.llm.enabled = False
+    sim = Simulation(cfg)
+    director = Director(sim, cfg)
+    iron = next(p for p in sim.world.discovered_patches() if p.ore == "iron_ore")
+    sim.build_field(iron.id)
+    fld = sim.fields[0]
+    fld.patch.reserve = 50          # nearly exhausted
+    _run(sim, director, seconds=120)
+    # the original field id 0 should have been retired and the patch drained
+    assert 0 not in sim.fields
+    assert fld.patch.depleted
+
+
+# ---- block-mutex collision safety ----------------------------------------
+def test_two_trains_one_lane_never_share_a_block():
+    sim = Simulation(Config())
+    iron = next(p for p in sim.world.discovered_patches() if p.ore == "iron_ore")
+    sim.build_field(iron.id)
+    sim.add_train(0)               # two trains on the same dedicated loop
+    dt = 1 / 60
+    for _ in range(int(240 / dt)):
+        sim.tick(dt)
+        seen: dict[int, int] = {}
+        for t in sim.trains.values():
+            for bid in t.locked:
+                blk = sim.net.blocks.get(bid)
+                # a locked block must be owned by exactly the train holding it
+                assert blk.occupant == t.id
+                assert bid not in seen, "two trains hold the same block!"
+                seen[bid] = t.id

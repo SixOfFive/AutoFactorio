@@ -30,6 +30,7 @@ def build_report(sim) -> dict:
             "reserve": int(f.patch.reserve),
             "buffer": int(f.buffer),
             "buffer_full": f.buffer >= f.buffer_cap * 0.9,
+            "depleted": f.patch.depleted,
         })
 
     patches = []
@@ -44,6 +45,8 @@ def build_report(sim) -> dict:
         })
 
     flags = []
+    if any(f.patch.depleted for f in sim.fields.values()):
+        flags.append("DEPLETED_FIELDS")
     if eco.inv.get("coal", 0) < 150:
         flags.append("LOW_COAL")
     if sim.stats()["stalled_trains"]:

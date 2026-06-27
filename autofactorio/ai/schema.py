@@ -12,6 +12,7 @@ from __future__ import annotations
 _SPEC = {
     "build_field":     {"patch_id": (int, True, None), "tier": (str, False, None)},
     "add_train":       {"field_id": (int, True, None)},
+    "abandon_field":   {"field_id": (int, True, None)},
     "build_assembler": {"count": (int, False, 1)},
     "build_furnace":   {"count": (int, False, 1)},
     "expand_drills":   {"field_id": (int, True, None), "count": (int, False, 2)},

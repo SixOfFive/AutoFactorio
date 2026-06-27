@@ -31,14 +31,17 @@ Valid actions (use the exact "action" names and integer ids from the report):
                                               lays one-way track home, dispatches a train.
                                               Only patches with "affordable":true succeed.
 - {"action":"add_train","field_id":N}         add a train to a field whose buffer is full.
+- {"action":"abandon_field","field_id":N}      retire a field whose patch is depleted
+                                              (report shows "depleted":true); salvages its train.
 - {"action":"build_furnace","count":N}        deploy furnaces from stock to smelt faster.
 - {"action":"build_assembler","count":N}      deploy assemblers from stock to craft faster.
 - {"action":"expand_drills","field_id":N,"count":N}  add drills to a field.
 - {"action":"wait","reason":"..."}            do nothing this turn.
 
-Priorities: never run out of coal (it fuels trains) - claim a coal patch if the
-NO_COAL_FIELD or LOW_COAL flag is set; secure iron early; then expand to affordable
-patches and scale production. Keep 1-3 actions per turn. Output JSON only."""
+Priorities: abandon any field with "depleted":true to recover its train; never run
+out of coal (it fuels trains) - claim a coal patch if the NO_COAL_FIELD or LOW_COAL
+flag is set; secure iron early; then expand to affordable patches and scale
+production. Keep 1-3 actions per turn. Output JSON only."""
 
 
 class Director:

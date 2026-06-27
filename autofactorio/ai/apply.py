@@ -17,6 +17,8 @@ def apply_actions(sim, actions: list[dict]) -> list[str]:
                 ok, msg = sim.build_field(a["patch_id"], a.get("tier"))
             elif name == "add_train":
                 ok, msg = sim.add_train(a["field_id"])
+            elif name == "abandon_field":
+                ok, msg = sim.abandon_field(a["field_id"])
             elif name == "build_assembler":
                 ok, msg = sim.build_assembler(max(1, a.get("count", 1)))
             elif name == "build_furnace":
