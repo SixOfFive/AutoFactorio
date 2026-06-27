@@ -76,13 +76,25 @@ run.py                  entry point
 play.bat                Windows launcher (forces the venv interpreter)
 assets/generate_assets.py   procedural CC0 sprite generation (runs on first launch)
 autofactorio/
-  config.py             balance numbers + endpoint/display config
-  engine/               world, fog, ore patches, mining, rail graph, trains, economy, scout, sim tick
-  ai/                   LLM client, worker-thread bridge, report, action schema, apply, autopilot, fallback
-  ui/                   camera (pan/zoom), renderer, HUD, comms console, main app loop
+  balance.py            all tuned game numbers (recipes, rates, starting inventory)
+  config.py             endpoint/display config (config.json + env overrides)
+  engine/               world+fog, mining, rail graph, trains, economy, scout, simulation, persistence
+  ai/                   LLM client, worker-thread director, report, action schema, apply, fallback
+  ui/                   camera, renderer, HUD, comms console, minimap, main app loop
+tests/                  pytest suite + headless smoke scripts + screenshot tool
 docs/ARCHITECTURE.md    design notes
 ```
 
-## Status
+## Features
 
-Active build. See `docs/ARCHITECTURE.md` for the design and `CHANGELOG`/git history for progress.
+- Self-expanding economy: mine → one-way train haul → smelt → craft → expand.
+- LLM director (Golden Eye) with an instant heuristic fallback.
+- Collision-free one-way directed rail (two parallel lanes + one-train-per-block mutex).
+- Finite ore patches; depleted fields are auto-retired and their trains salvaged.
+- Progressive fog of war revealed by an autonomous scout.
+- Procedurally-generated CC0 art; trees/rocks scenery.
+- Camera pan/zoom, **minimap** (click to jump), click-to-select/follow trains & fields.
+- Save / load (F5 / F9 or `--load`).
+- pytest suite covering the loop, self-expansion, depletion lifecycle, block-mutex, and save/load.
+
+See `docs/ARCHITECTURE.md` for the design and git history for progress.
