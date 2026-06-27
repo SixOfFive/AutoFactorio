@@ -49,8 +49,10 @@ class World:
         # fog: 0 = unexplored (black), 1 = revealed
         self.explored = np.zeros((self.size, self.size), dtype=np.uint8)
         self.patches: list[OrePatch] = []
+        self.decor: list[tuple[int, int, str]] = []   # (tx, ty, 'tree'|'rock') scenery
         self.hq = (0, 0)
         self._gen_patches()
+        self._gen_decor()
         # reveal a generous area around HQ so the player starts with room to build
         self.reveal(0, 0, balance.SCOUT_REVEAL_RADIUS * 2)
 
@@ -104,6 +106,21 @@ class World:
             self.patches.append(OrePatch(pid, ore, cx, cy, rad, reserve, reserve))
             placed.append((cx, cy, rad))
             pid += 1
+
+    def _gen_decor(self) -> None:
+        """Scatter trees/rocks as scenery, away from HQ and ore patches. Revealed
+        with the fog like everything else."""
+        n = self.size * self.size // 220
+        for _ in range(n):
+            tx = int(self.rng.integers(-self.radius, self.radius + 1))
+            ty = int(self.rng.integers(-self.radius, self.radius + 1))
+            if tx * tx + ty * ty < 12 * 12:                     # keep HQ clear
+                continue
+            if any((tx - p.cx) ** 2 + (ty - p.cy) ** 2 < (p.radius + 3) ** 2
+                   for p in self.patches):
+                continue
+            kind = "tree" if self.rng.random() < 0.62 else "rock"
+            self.decor.append((tx, ty, kind))
 
     # ---- fog --------------------------------------------------------------
     def reveal(self, cx: float, cy: float, radius: float) -> list[OrePatch]:

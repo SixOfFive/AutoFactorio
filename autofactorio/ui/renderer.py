@@ -27,8 +27,9 @@ class Renderer:
         self.a = assets
 
     # ---- public -----------------------------------------------------------
-    def draw(self, screen: pygame.Surface, cam, sim) -> None:
+    def draw(self, screen: pygame.Surface, cam, sim, selected=None) -> None:
         screen.fill(GRASS)
+        self._decor(screen, cam, sim)
         self._patches(screen, cam, sim)
         self._rails(screen, cam, sim)
         self._stations(screen, cam, sim)
@@ -36,7 +37,39 @@ class Renderer:
         self._home(screen, cam, sim)
         self._trains(screen, cam, sim)
         self._scout(screen, cam, sim)
+        self._selection(screen, cam, sim, selected)
         self._fog(screen, cam, sim.world)
+
+    def _decor(self, screen, cam, sim):
+        world = sim.world
+        x0, y0, x1, y1 = cam.visible_tile_bounds(margin=2)
+        for (tx, ty, kind) in world.decor:
+            if tx < x0 or tx > x1 or ty < y0 or ty > y1:
+                continue
+            if not world.is_explored(tx, ty):
+                continue
+            self._blit(screen, cam, kind, tx, ty, 1.7)
+
+    def _selection(self, screen, cam, sim, selected):
+        if not selected:
+            return
+        kind, sid = selected
+        pos = None
+        if kind == "train":
+            t = sim.trains.get(sid)
+            if t:
+                poses = t.car_poses()
+                if poses:
+                    pos = (poses[0][0], poses[0][1])
+        elif kind == "field":
+            f = sim.fields.get(sid)
+            if f:
+                pos = (f.patch.cx, f.patch.cy)
+        if pos is None:
+            return
+        sx, sy = cam.world_to_screen(*pos)
+        r = max(8, int(2.2 * cam.zoom))
+        pygame.draw.circle(screen, (250, 240, 120), (int(sx), int(sy)), r, 2)
 
     # ---- helpers ----------------------------------------------------------
     def _on(self, cam, sx, sy, pad=80) -> bool:

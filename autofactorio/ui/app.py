@@ -60,6 +60,8 @@ class App:
         w, h = self.screen.get_size()
         self.cam = Camera(0, 0, 20.0, w, h)
         self.follow_scout = False
+        self.follow_selected = False
+        self.selected = None            # ('train', id) | ('field', id) | None
         self.show_console = True
         self.show_detail = False
         self.show_minimap = True
@@ -73,8 +75,7 @@ class App:
                 dt = self.clock.tick(self.config.display.fps) / 1000.0
                 self._events()
                 self._held_keys(dt)
-                if self.follow_scout:
-                    self.cam.center_on(*self.sim.scout.pos)
+                self._apply_follow()
                 self.sim.tick(dt)
                 self.director.update()
                 self._draw()
@@ -96,6 +97,9 @@ class App:
             elif e.type == pygame.MOUSEBUTTONDOWN and e.button == 1:
                 if self.show_minimap and self.minimap.handle_click(e.pos, self.screen, self.cam, self.sim):
                     self.follow_scout = False
+                    self.follow_selected = False
+                else:
+                    self._pick(e.pos)
             elif e.type == pygame.MOUSEMOTION:
                 if e.buttons[2]:                       # right-button drag = grab pan
                     self.cam.pan_pixels(e.rel[0], e.rel[1])
@@ -110,6 +114,8 @@ class App:
             self.sim.paused = not self.sim.paused
         elif e.key == pygame.K_f:
             self.follow_scout = not self.follow_scout
+            if self.follow_scout:
+                self.follow_selected = False
         elif e.key == pygame.K_i:
             self.show_detail = not self.show_detail
         elif e.key == pygame.K_l:
@@ -134,6 +140,45 @@ class App:
             self.speed_idx = max(self.speed_idx - 1, 0)
             self.sim.speed = balance.GAME_SPEEDS[self.speed_idx]
 
+    def _pick(self, pos) -> None:
+        """Select the nearest train (then field) to a world click; deselect on miss."""
+        wx, wy = self.cam.screen_to_world(*pos)
+        best = None
+        best_d = 4.0 ** 2                     # within ~4 tiles of a loco
+        for t in self.sim.trains.values():
+            poses = t.car_poses()
+            if not poses:
+                continue
+            d = (poses[0][0] - wx) ** 2 + (poses[0][1] - wy) ** 2
+            if d < best_d:
+                best_d, best = d, ("train", t.id)
+        if best is not None:
+            self.selected = best
+            self.follow_selected = True
+            self.follow_scout = False
+            return
+        for f in self.sim.fields.values():
+            rad = (f.patch.radius + 3) ** 2
+            if (f.patch.cx - wx) ** 2 + (f.patch.cy - wy) ** 2 < rad:
+                self.selected = ("field", f.id)
+                self.follow_selected = False
+                self.cam.center_on(f.patch.cx, f.patch.cy)
+                return
+        self.selected = None
+        self.follow_selected = False
+
+    def _apply_follow(self) -> None:
+        if self.follow_selected and self.selected and self.selected[0] == "train":
+            t = self.sim.trains.get(self.selected[1])
+            if t:
+                poses = t.car_poses()
+                if poses:
+                    self.cam.center_on(poses[0][0], poses[0][1])
+                    return
+            self.follow_selected = False       # train gone (e.g. salvaged)
+        if self.follow_scout:
+            self.cam.center_on(*self.sim.scout.pos)
+
     def _held_keys(self, dt: float) -> None:
         k = pygame.key.get_pressed()
         pan = (700.0 * dt) / self.cam.zoom
@@ -152,12 +197,41 @@ class App:
 
     # ---- draw -------------------------------------------------------------
     def _draw(self) -> None:
-        self.renderer.draw(self.screen, self.cam, self.sim)
+        self.renderer.draw(self.screen, self.cam, self.sim, self.selected)
         self.hud.draw(self.screen, self.sim, self.director, self.show_detail)
         if self.show_minimap:
             self.minimap.draw(self.screen, self.cam, self.sim)
+        self._draw_selection_readout()
         if self.show_console:
             self.console.draw(self.screen, self.sim)
         else:
             hint = self.hint_font.render(HINT, True, (150, 156, 166))
             self.screen.blit(hint, (10, self.screen.get_height() - 22))
+
+    def _draw_selection_readout(self) -> None:
+        if not self.selected:
+            return
+        kind, sid = self.selected
+        text = None
+        if kind == "train":
+            t = self.sim.trains.get(sid)
+            if t:
+                st = "following" if self.follow_selected else "selected"
+                text = (f"Train #{sid} [{st}]  cargo {t.cargo_total()}/{t.capacity}  "
+                        f"fuel {t.fuel_seconds:.0f}s  {t.state}"
+                        + ("  STALLED" if t.stalled else ""))
+        elif kind == "field":
+            f = self.sim.fields.get(sid)
+            if f:
+                text = (f"Field #{sid}  {f.patch.ore}  drills {f.drills}  "
+                        f"buffer {f.buffer}  reserve {int(f.patch.reserve)}")
+        if not text:
+            self.selected = None
+            return
+        surf = self.hint_font.render(text, True, (250, 240, 160))
+        y = self.screen.get_height() - (self.console.lines * 18 + 16) - 22 if self.show_console \
+            else self.screen.get_height() - 40
+        bg = pygame.Surface((surf.get_width() + 12, 20), pygame.SRCALPHA)
+        bg.fill((10, 12, 17, 200))
+        self.screen.blit(bg, (8, y - 2))
+        self.screen.blit(surf, (12, y))

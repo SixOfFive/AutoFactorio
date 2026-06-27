@@ -28,7 +28,7 @@ _BUILD_ORDER = [
     "stone_furnace", "rail", "rail_signal", "chain_signal",
     "train_stop", "electric_drill", "assembler", "cargo_wagon", "locomotive",
 ]
-_IRON_RESERVE_FOR_STEEL = 80       # keep this many iron plates before making steel
+_IRON_RESERVE_FOR_STEEL = 40       # keep this many iron plates before making steel
 _SMELT_BANK_CAP = 64.0             # max furnace-seconds banked
 _CRAFT_BANK_CAP = 16.0             # max assembler-seconds banked
 
