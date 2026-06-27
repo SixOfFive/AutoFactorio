@@ -90,6 +90,7 @@ class Simulation:
             if t.state == "waiting":
                 self._service_station(t, dt)
         self._crush_animals()
+        self._update_decommission()
 
     # ---- robots / animals -------------------------------------------------
     @property
@@ -169,7 +170,12 @@ class Simulation:
         train.idle_timer = 0.0 if moved > 0 else train.idle_timer + dt
         train.wait_timer += dt
         if self._wait_satisfied(train, leg):
-            train.depart(self.net)
+            # a recalled train that has reached the home (unload) stop empty goes
+            # into storage instead of looping back out
+            if train.recall and st.is_home and train.cargo_total() == 0:
+                self._store_train(train)
+            else:
+                train.depart(self.net)
 
     def _wait_satisfied(self, train: Train, leg: Leg) -> bool:
         kind = leg.wait[0]
@@ -317,53 +323,68 @@ class Simulation:
         return True, f"second train #{tid} added to field #{field_id}"
 
     def abandon_field(self, field_id: int) -> tuple[bool, str]:
-        """Retire a field (usually a depleted patch): remove its trains, salvage
-        their locomotives + wagons back to stock, and release any block locks they
-        held. Rails are left in place. The patch frees up for re-claim if it still
-        has reserve."""
+        """Begin decommissioning a depleted field. This does NOT instantly remove
+        anything: the field's trains are recalled to finish their run, drive home,
+        and go into storage; only once they are all stored does a robot get sent
+        to tear up the track + drills and haul the materials back to base."""
         field = self.fields.get(field_id)
         if field is None:
             return False, f"no field #{field_id}"
+        if field.state != "active":
+            return True, f"field #{field_id} already decommissioning"
         if not field.patch.depleted:
-            # guard against the director scrapping productive fields
             return False, f"field #{field_id} still has ore; not abandoning"
-        removed = 0
-        salvaged_wagons = 0
-        for tid in list(self.trains.keys()):
-            t = self.trains[tid]
-            st = self.net.stations.get(t.legs[0].station_id)
-            if st is not None and st.field_id == field_id:
-                for bid in list(t.locked):
-                    blk = self.net.blocks.get(bid)
-                    if blk is not None and blk.occupant == t.id:
-                        blk.occupant = None
-                self.economy.add("locomotive", 1)
-                self.economy.add("cargo_wagon", t.wagons)
-                salvaged_wagons += t.wagons
-                del self.trains[tid]
-                removed += 1
-        # tear up the track and recover materials
+        field.state = "recalling"
+        n = 0
+        for t in self.trains.values():
+            if self._train_field(t) == field_id:
+                t.recall = True
+                n += 1
+        self.log(f"Field #{field_id} depleted: recalling {n} train(s) to storage "
+                 f"before tearing up the track.")
+        return True, f"decommissioning field #{field_id}"
+
+    def _train_field(self, train: Train) -> int | None:
+        st = self.net.stations.get(train.legs[0].station_id)
+        return st.field_id if st is not None else None
+
+    def _store_train(self, train: Train) -> None:
+        for bid in list(train.locked):
+            blk = self.net.blocks.get(bid)
+            if blk is not None and blk.occupant == train.id:
+                blk.occupant = None
+        self.economy.add("locomotive", 1)
+        self.economy.add("cargo_wagon", train.wagons)
+        self.trains.pop(train.id, None)
+        self.log(f"Train #{train.id} returned home and went into storage "
+                 f"(+1 loco, +{train.wagons} wagons).")
+
+    def _update_decommission(self) -> None:
+        """Advance fields through recalling -> dismantling once their trains are
+        all home/stored (robots then handle the actual teardown)."""
+        for field in self.fields.values():
+            if field.state == "recalling":
+                if not any(self._train_field(t) == field.id for t in self.trains.values()):
+                    field.state = "dismantling"
+                    self.log(f"Field #{field.id}: all trains stored; dispatching a robot "
+                             f"to dismantle the track.")
+
+    def teardown_field_track(self, field) -> dict:
+        """Called by a robot that has reached a decommissioned field: remove its
+        track from the network and return the materials it should haul home
+        (drills + stops fully recovered, rail partially)."""
         self.net.remove_edges(field.edge_ids)
         for sid in field.station_ids:
             self.net.remove_station(sid)
-        rail_back = int(field.rail_used * balance.RECLAIM_REFUND)
-        stops_back = max(0, int(len(field.station_ids) * balance.RECLAIM_REFUND))
         drill_item = "electric_drill" if field.tier == "electric" else "burner_drill"
-        drills_back = int(field.drills * balance.RECLAIM_REFUND)
-        if rail_back:
-            self.economy.add("rail", rail_back)
-        if stops_back:
-            self.economy.add("train_stop", stops_back)
-        if drills_back:
-            self.economy.add(drill_item, drills_back)
-
-        del self.fields[field_id]
-        self._depleted_announced.discard(field_id)
-        if not field.patch.depleted:
-            field.patch.claimed = False           # reclaimable if ore remains
-        self.log(f"Abandoned field #{field_id}; tore up track (+{rail_back} rail) and "
-                 f"salvaged {removed} locomotive(s), {salvaged_wagons} wagon(s).")
-        return True, f"abandoned field #{field_id} (reclaimed {rail_back} rail, {removed} train(s))"
+        materials = {
+            "rail": int(field.rail_used * balance.RECLAIM_REFUND),
+            "train_stop": len(field.station_ids),
+            drill_item: field.drills,
+        }
+        self.fields.pop(field.id, None)
+        self._depleted_announced.discard(field.id)
+        return materials
 
     def research_next(self) -> tuple[bool, str]:
         """Research the next tech if its cost is in stock; applies the effect and

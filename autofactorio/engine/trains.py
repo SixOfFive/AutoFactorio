@@ -43,6 +43,7 @@ class Train:
         self.idle_timer = 0.0            # seconds since last cargo transfer
         self.stalled = False             # out of fuel mid-track
         self.waiting_for_train = False   # yielding to another train ahead
+        self.recall = False              # field decommissioned: return home and store
         self.locked: set[int] = set()
         # current-leg cached geometry
         self._pts: list[tuple[float, float]] = []

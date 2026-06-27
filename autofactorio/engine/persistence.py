@@ -53,7 +53,9 @@ def save_game(sim, path: str) -> None:
             "next_id": sim.robots._rid,
             "list": [{"id": r.id, "x": r.x, "y": r.y, "heading": r.heading, "hp": r.hp,
                       "explorer": r.explorer, "carry_coal": r.carry_coal,
-                      "angle": r.angle, "radius": r.radius} for r in sim.robots.values()],
+                      "angle": r.angle, "radius": r.radius, "task": r.task,
+                      "target": r.target, "dismantle_phase": r.dismantle_phase,
+                      "carry_reclaim": dict(r.carry_reclaim)} for r in sim.robots.values()],
         },
         "animals": {
             "next_aid": sim.animals._aid, "next_hid": sim.animals._hid,
@@ -91,7 +93,8 @@ def save_game(sim, path: str) -> None:
             {"id": f.id, "patch_id": f.patch.id, "drills": f.drills, "tier": f.tier,
              "load_station_id": f.load_station_id, "buffer": f.buffer,
              "buffer_cap": f.buffer_cap, "edge_ids": list(f.edge_ids),
-             "station_ids": list(f.station_ids), "rail_used": f.rail_used}
+             "station_ids": list(f.station_ids), "rail_used": f.rail_used,
+             "state": f.state}
             for f in sim.fields.values()
         ],
         "trains": [
@@ -99,6 +102,7 @@ def save_game(sim, path: str) -> None:
              "fuel_seconds": t.fuel_seconds, "speed": t.speed, "state": t.state,
              "cur_leg": t.cur_leg, "head_s": t.head_s, "wait_timer": t.wait_timer,
              "idle_timer": t.idle_timer, "stalled": t.stalled, "hp": t.hp,
+             "recall": t.recall,
              "legs": [{"edges": l.edges, "station_id": l.station_id, "wait": list(l.wait)}
                       for l in t.legs]}
             for t in sim.trains.values()
@@ -153,6 +157,10 @@ def load_into(sim, path: str) -> None:
         r.carry_coal = rd.get("carry_coal", 0.0)
         r.angle = rd.get("angle", 0.7)
         r.radius = rd.get("radius", 18.0)
+        r.task = rd.get("task", "explore")
+        r.target = rd.get("target")
+        r.dismantle_phase = rd.get("dismantle_phase")
+        r.carry_reclaim = dict(rd.get("carry_reclaim", {}))
         r.tx, r.ty = r._spiral_target()
         sim.robots.list[r.id] = r
     sim.robots._rid = rdata.get("next_id", len(sim.robots.list))
@@ -217,6 +225,7 @@ def load_into(sim, path: str) -> None:
         fld.edge_ids = list(sf.get("edge_ids", []))
         fld.station_ids = list(sf.get("station_ids", []))
         fld.rail_used = sf.get("rail_used", 0)
+        fld.state = sf.get("state", "active")
         sim.fields[sf["id"]] = fld
 
     # trains (rebuild geometry, then restore dynamic state)

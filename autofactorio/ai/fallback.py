@@ -27,10 +27,10 @@ def decide(sim, report) -> dict:
     def field_action(p, why):
         return {"reasoning": why, "actions": [{"action": "build_field", "patch_id": p.id}]}
 
-    # 0. retire exhausted fields first - frees (salvages) a train to redeploy
+    # 0. decommission newly-exhausted fields (recall trains, then robots tear up track)
     for f in list(sim.fields.values()):
-        if f.patch.depleted:
-            return {"reasoning": f"Field #{f.id} patch is exhausted; abandoning to salvage its train.",
+        if f.patch.depleted and getattr(f, "state", "active") == "active":
+            return {"reasoning": f"Field #{f.id} patch is exhausted; decommissioning it.",
                     "actions": [{"action": "abandon_field", "field_id": f.id}]}
 
     # 1. secure one field of every essential ore type ASAP - all four are needed

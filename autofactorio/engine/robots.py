@@ -25,9 +25,12 @@ class Robot:
         self.hp = balance.ROBOT_HP
         self.explorer = explorer
         self.task = "explore"
+        self.target = None
         self.attack_cd = 0.0
         self.carry_coal = 0.0
         self.fuel_phase: str | None = None       # 'to_coal' | 'return'
+        self.dismantle_phase: str | None = None  # 'to_field' | 'to_home'
+        self.carry_reclaim: dict = {}            # materials hauled back from a torn-up field
         # spiral-explore state
         self.angle = 0.7
         self.radius = float(balance.PATCH_MIN_RING)
@@ -106,6 +109,8 @@ class Robots:
                 r.attack_cd -= dt
             if r.task == "repair":
                 self._do_repair(sim, r, dt)
+            elif r.task == "dismantle":
+                self._do_dismantle(sim, r, dt)
             elif r.task == "fuel":
                 self._do_fuel(sim, r, dt)
             elif r.task == "hunt":
@@ -122,9 +127,16 @@ class Robots:
 
     # ---- assignment -------------------------------------------------------
     def _assign(self, sim) -> None:
+        # keep robots that are mid-dismantle (already travelling / hauling) on task
+        busy = set()
         for r in self.list.values():
-            r.task = None
-        free = sorted(self.list.values(), key=lambda r: (r.explorer, r.id))  # explorer last
+            if r.task == "dismantle" and r.dismantle_phase is not None:
+                busy.add(r.id)
+            else:
+                r.task = None
+        covered = {self.list[rid].target for rid in busy}
+        free = sorted((r for r in self.list.values() if r.id not in busy),
+                      key=lambda r: (r.explorer, r.id))    # explorer last
         # 1. repair the most-damaged trains
         damaged = sorted((t for t in sim.trains.values() if t.hp < t.max_hp - 0.5),
                          key=lambda t: t.hp)
@@ -138,11 +150,23 @@ class Robots:
             r.task = "repair"
             r.target = t.id
             free.remove(r)
-        # 2. emergency fuel (one robot) when coal is critically low
+        # 2. dismantle fields whose trains are already stored (track tear-down)
+        for f in sim.fields.values():
+            if getattr(f, "state", "active") != "dismantling" or f.id in covered:
+                continue
+            if not free:
+                break
+            r = min(free, key=lambda r: (r.x - f.patch.cx) ** 2 + (r.y - f.patch.cy) ** 2)
+            r.task = "dismantle"
+            r.target = f.id
+            r.dismantle_phase = "to_field"
+            covered.add(f.id)
+            free.remove(r)
+        # 3. emergency fuel (one robot) when coal is critically low
         if sim.economy.inv.get("coal", 0) < balance.FUEL_CRITICAL and free:
             r = free.pop(0)
             r.task = "fuel"
-        # 3 & 4. remaining robots hunt nearby animals, else explore
+        # 4 & 5. remaining robots hunt nearby animals, else explore
         for r in free:
             target = None if r.explorer else sim.animals.nearest(r.x, r.y, balance.ROBOT_HUNT_RADIUS)
             if target is not None:
@@ -193,6 +217,35 @@ class Robots:
         d = r.move_toward(head[0], head[1], balance.ROBOT_SPEED, dt)
         if d <= balance.ROBOT_ATTACK_RANGE + 1.0:
             t.hp = min(t.max_hp, t.hp + balance.ROBOT_REPAIR_RATE * dt)
+
+    def _do_dismantle(self, sim, r: Robot, dt: float) -> None:
+        # travel out to a decommissioned field, tear up its track + drills, and
+        # haul the materials back to base for reuse.
+        if r.dismantle_phase is None:
+            r.dismantle_phase = "to_field"
+        if r.dismantle_phase == "to_field":
+            field = sim.fields.get(r.target)
+            if field is None:                       # already gone
+                r.dismantle_phase = None
+                r.task = "explore"
+                return
+            d = r.move_toward(field.patch.cx, field.patch.cy, balance.ROBOT_SPEED, dt)
+            if d <= 2.5:
+                r.carry_reclaim = sim.teardown_field_track(field)
+                r.dismantle_phase = "to_home"
+                sim.log(f"Robot #{r.id} tore up field #{r.target}'s track; hauling salvage home.")
+        elif r.dismantle_phase == "to_home":
+            d = r.move_toward(0.0, 0.0, balance.ROBOT_SPEED, dt)
+            if d < 2.5:
+                got = {k: int(v) for k, v in r.carry_reclaim.items() if v}
+                for k, v in got.items():
+                    sim.economy.add(k, v)
+                if got:
+                    sim.log(f"Robot #{r.id} returned salvage to base for reuse: {got}.")
+                r.carry_reclaim = {}
+                r.dismantle_phase = None
+                r.target = None
+                r.task = "explore"
 
     def _do_fuel(self, sim, r: Robot, dt: float) -> None:
         # slow last-resort coal run: go to the nearest known coal patch, fill up,

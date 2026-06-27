@@ -73,24 +73,46 @@ def test_network_self_expands():
 
 
 # ---- depleted-field lifecycle --------------------------------------------
-def test_abandon_field_salvages_train():
+def test_decommission_stores_train_then_robot_reclaims_track():
     sim = Simulation(Config())
     iron = next(p for p in sim.world.discovered_patches() if p.ore == "iron_ore")
     locos_before = sim.economy.inv.get("locomotive", 0)
+    rail_before = sim.economy.inv.get("rail", 0)
     sim.build_field(iron.id)
     assert sim.economy.inv.get("locomotive", 0) == locos_before - 1
-    assert len(sim.trains) == 1
-    sim.fields[0].patch.reserve = 0               # deplete so it may be abandoned
-    ok, msg = sim.abandon_field(0)
-    assert ok, msg
-    assert len(sim.trains) == 0
-    assert len(sim.fields) == 0
-    # locomotive + wagons salvaged back to stock
-    assert sim.economy.inv.get("locomotive", 0) == locos_before
-    assert sim.economy.inv.get("cargo_wagon", 0) >= balance.DEFAULT_WAGONS
+    f = sim.fields[0]
+    edges = list(f.edge_ids)
+    f.patch.reserve = 0
+    ok, _ = sim.abandon_field(0)
+    assert ok and sim.fields[0].state == "recalling"
+    assert len(sim.trains) == 1                    # NOT removed instantly
+    assert all(e in sim.net.edges for e in edges)  # track NOT torn up yet
+    # drive it: train returns home -> storage -> robot tears up track -> hauls home
+    for _ in range(int(400 / (1 / 60))):
+        sim.tick(1 / 60)
+        if 0 not in sim.fields:
+            break
+    assert 0 not in sim.fields                      # fully decommissioned
+    assert all(e not in sim.net.edges for e in edges)             # track removed
+    assert sim.economy.inv.get("locomotive", 0) >= locos_before   # train stored
+    assert sim.economy.inv.get("rail", 0) > rail_before           # rail hauled back
 
 
-def test_depleted_patch_is_auto_abandoned():
+def test_abandon_is_idempotent_and_non_destructive_at_start():
+    sim = Simulation(Config())
+    iron = next(p for p in sim.world.discovered_patches() if p.ore == "iron_ore")
+    sim.build_field(iron.id)
+    f = sim.fields[0]
+    edges = list(f.edge_ids)
+    f.patch.reserve = 0
+    ok, _ = sim.abandon_field(0)
+    assert ok and f.state == "recalling"
+    assert all(e in sim.net.edges for e in edges)   # nothing torn up immediately
+    ok2, _ = sim.abandon_field(0)                    # repeated calls are no-ops
+    assert ok2 and f.state == "recalling"
+
+
+def test_depleted_patch_is_auto_decommissioned():
     cfg = Config()
     cfg.llm.enabled = False
     sim = Simulation(cfg)
@@ -99,8 +121,8 @@ def test_depleted_patch_is_auto_abandoned():
     sim.build_field(iron.id)
     fld = sim.fields[0]
     fld.patch.reserve = 50          # nearly exhausted
-    _run(sim, director, seconds=120)
-    # the original field id 0 should have been retired and the patch drained
+    _run(sim, director, seconds=300)
+    # the original field id 0 should have been fully decommissioned and drained
     assert 0 not in sim.fields
     assert fld.patch.depleted
 
@@ -292,21 +314,6 @@ def test_farther_field_depletes_nearer_ones():
     before = near.reserve
     sim._deplete_nearer_fields(new_fid=999, new_dist=120.0)
     assert near.reserve < before
-
-
-def test_abandon_reclaims_track_materials():
-    sim = Simulation(Config())
-    iron = next(p for p in sim.world.discovered_patches() if p.ore == "iron_ore")
-    sim.build_field(iron.id)
-    f = sim.fields[0]
-    edges = list(f.edge_ids)
-    assert edges and all(e in sim.net.edges for e in edges)
-    rail_before = sim.economy.inv.get("rail", 0)
-    f.patch.reserve = 0
-    ok, _ = sim.abandon_field(0)
-    assert ok
-    assert all(e not in sim.net.edges for e in edges)          # track torn up
-    assert sim.economy.inv.get("rail", 0) > rail_before        # rail reclaimed
 
 
 def test_explorer_spiral_restarts_from_home():
