@@ -1,0 +1,202 @@
+"""Trains: composition, movement along leg polylines, block-mutex locking,
+fuel, cargo, and a looping schedule of legs.
+
+A Train owns its physics/movement and block reservation. Economy interactions
+(loading ore, unloading at home, refueling) are driven by the Simulation when a
+train is parked, to avoid an engine<->sim import cycle.
+"""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass, field
+
+from .. import balance
+from .rail import RailNetwork
+
+
+@dataclass
+class Leg:
+    edges: list[int]
+    station_id: int
+    wait: tuple                      # ('full_cargo',) | ('empty_cargo',) | ('time', secs)
+
+
+class Train:
+    def __init__(self, tid: int, legs: list[Leg], wagons: int, net: RailNetwork):
+        self.id = tid
+        self.legs = legs
+        self.wagons = wagons
+        self.capacity = wagons * balance.CARGO_WAGON_CAPACITY
+        self.cargo: dict[str, int] = {}
+        self.fuel_seconds = balance.LOCO_START_FUEL * balance.COAL_BURN_SECONDS
+        self.speed = 0.0
+        self.state = "moving"            # 'moving' | 'waiting'
+        self.cur_leg = 0
+        self.wait_timer = 0.0
+        self.idle_timer = 0.0            # seconds since last cargo transfer
+        self.stalled = False             # out of fuel mid-track
+        self.locked: set[int] = set()
+        # current-leg cached geometry
+        self._pts: list[tuple[float, float]] = []
+        self._cum: list[float] = []
+        self._intervals: list[tuple[float, float, int]] = []  # (start, end, block_id)
+        self.leg_len = 0.0
+        self.head_s = 0.0
+        self.begin_leg(net, 0)
+
+    # ---- cargo ------------------------------------------------------------
+    def cargo_total(self) -> int:
+        return sum(self.cargo.values())
+
+    def cargo_free(self) -> int:
+        return self.capacity - self.cargo_total()
+
+    # ---- leg geometry -----------------------------------------------------
+    def begin_leg(self, net: RailNetwork, idx: int) -> None:
+        self.cur_leg = idx
+        leg = self.legs[idx]
+        pts: list[tuple[float, float]] = []
+        intervals: list[tuple[float, float, int]] = []
+        acc = 0.0
+        for eid in leg.edges:
+            e = net.edges[eid]
+            if not pts:
+                pts.append(e.points[0])
+            for p in e.points[1:]:
+                pts.append(p)
+            intervals.append((acc, acc + e.length, e.block_id))
+            acc += e.length
+        if not pts:                      # degenerate leg (shouldn't happen)
+            pts = [net.node_pos(net.stations[leg.station_id].node_id)]
+        self._pts = pts
+        self._cum = _cumulative(pts)
+        self._intervals = intervals
+        self.leg_len = self._cum[-1] if self._cum else 0.0
+        self.head_s = 0.0
+        self.speed = 0.0
+        self.state = "moving"
+
+    def _block_at(self, dist: float) -> int | None:
+        for s, e, bid in self._intervals:
+            if s <= dist <= e:
+                return bid
+        return None
+
+    def _block_start(self, bid: int) -> float:
+        for s, _, b in self._intervals:
+            if b == bid:
+                return s
+        return 0.0
+
+    def _body_blocks(self) -> set[int]:
+        lo = max(0.0, self.head_s - balance.MAX_TRAIN_LEN)
+        ids: set[int] = set()
+        d = lo
+        while d < self.head_s:
+            b = self._block_at(d)
+            if b is not None:
+                ids.add(b)
+            d += 1.0
+        b = self._block_at(self.head_s)
+        if b is not None:
+            ids.add(b)
+        return ids
+
+    # ---- movement ---------------------------------------------------------
+    def update_movement(self, dt: float, net: RailNetwork) -> None:
+        if self.state != "moving":
+            return
+        if self.fuel_seconds <= 0:
+            self.speed = 0.0
+            self.stalled = True
+            return
+        self.stalled = False
+        self.speed = min(balance.TRAIN_MAX_SPEED, self.speed + balance.TRAIN_ACCEL * dt)
+        ds = self.speed * dt
+        target = min(self.leg_len, self.head_s + ds)
+
+        # block reservation: don't enter a block another train holds
+        front_block_after = self._block_at(target)
+        cur_block = self._block_at(self.head_s)
+        if front_block_after is not None and front_block_after != cur_block:
+            blk = net.blocks.get(front_block_after)
+            if blk is not None and blk.occupant not in (None, self.id):
+                bstart = self._block_start(front_block_after)
+                target = max(self.head_s, bstart - 0.05)
+                self.speed = 0.0
+
+        moved = target - self.head_s
+        if moved > 0:
+            self.fuel_seconds -= dt
+        self.head_s = target
+
+        # acquire blocks now under the body; release ones we left
+        body = self._body_blocks()
+        for bid in body:
+            blk = net.blocks.get(bid)
+            if blk is not None and blk.occupant in (None, self.id):
+                blk.occupant = self.id
+        for bid in list(self.locked):
+            if bid not in body:
+                blk = net.blocks.get(bid)
+                if blk is not None and blk.occupant == self.id:
+                    blk.occupant = None
+        self.locked = set(body)
+
+        if self.head_s >= self.leg_len - 1e-6:
+            self.head_s = self.leg_len
+            self.state = "waiting"
+            self.wait_timer = 0.0
+            self.idle_timer = 0.0
+            self.speed = 0.0
+
+    def depart(self, net: RailNetwork) -> None:
+        self.begin_leg(net, (self.cur_leg + 1) % len(self.legs))
+
+    # ---- rendering --------------------------------------------------------
+    def car_poses(self) -> list[tuple[float, float, float, str]]:
+        """(x, y, angle_deg, kind) for the loco + each wagon, front to back."""
+        step = balance.ENTITY_LEN + balance.COUPLING
+        poses = []
+        for i in range(self.wagons + 1):
+            d = max(0.0, self.head_s - i * step)
+            x, y, ang = _point_at(self._pts, self._cum, d)
+            poses.append((x, y, ang, "loco" if i == 0 else "wagon"))
+        return poses
+
+    @property
+    def current_station_id(self) -> int:
+        return self.legs[self.cur_leg].station_id
+
+
+def _cumulative(pts: list[tuple[float, float]]) -> list[float]:
+    cum = [0.0]
+    for i in range(1, len(pts)):
+        cum.append(cum[-1] + math.dist(pts[i - 1], pts[i]))
+    return cum
+
+
+def _point_at(pts, cum, dist):
+    if not pts:
+        return 0.0, 0.0, 0.0
+    if len(pts) == 1:
+        return pts[0][0], pts[0][1], 0.0
+    dist = max(0.0, min(dist, cum[-1]))
+    # locate segment
+    lo, hi = 0, len(cum) - 1
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if cum[mid] < dist:
+            lo = mid + 1
+        else:
+            hi = mid
+    i = max(1, lo)
+    seg = cum[i] - cum[i - 1]
+    t = 0.0 if seg <= 0 else (dist - cum[i - 1]) / seg
+    ax, ay = pts[i - 1]
+    bx, by = pts[i]
+    x = ax + (bx - ax) * t
+    y = ay + (by - ay) * t
+    ang = math.degrees(math.atan2(by - ay, bx - ax))
+    return x, y, ang
