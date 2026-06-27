@@ -103,6 +103,46 @@ def test_depleted_patch_is_auto_abandoned():
     assert fld.patch.depleted
 
 
+# ---- save / load ----------------------------------------------------------
+def test_save_load_roundtrip(tmp_path):
+    cfg = Config()
+    cfg.llm.enabled = False
+    sim = Simulation(cfg)
+    director = Director(sim, cfg)
+    _run(sim, director, seconds=120)
+    before = sim.stats()
+    inv_before = dict(sim.economy.inv)
+    path = str(tmp_path / "save.json")
+    ok, _ = sim.save(path)
+    assert ok
+
+    sim2 = Simulation(Config(seed=cfg.seed))
+    ok, _ = sim2.load(path)
+    assert ok
+    after = sim2.stats()
+    assert after["fields"] == before["fields"]
+    assert after["trains"] == before["trains"]
+    assert after["delivered"] == before["delivered"]
+    assert abs(after["time"] - before["time"]) < 1e-6
+    assert dict(sim2.economy.inv) == inv_before
+    # the loaded game must keep running cleanly
+    d2 = Director(sim2, Config(seed=cfg.seed))
+    _run(sim2, d2, seconds=60)
+    assert sim2.stats()["delivered"] >= before["delivered"]
+
+
+def test_load_rebuilds_world_on_seed_mismatch(tmp_path):
+    cfg = Config(seed=4242)
+    sim = Simulation(cfg)
+    sim.build_field(next(p for p in sim.world.discovered_patches() if p.ore == "iron_ore").id)
+    _run(sim, seconds=30)
+    path = str(tmp_path / "s.json")
+    sim.save(path)
+    other = Simulation(Config(seed=999))     # different seed
+    ok, _ = other.load(path)
+    assert ok and other.world.seed == 4242
+
+
 # ---- block-mutex collision safety ----------------------------------------
 def test_two_trains_one_lane_never_share_a_block():
     sim = Simulation(Config())

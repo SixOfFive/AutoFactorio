@@ -56,6 +56,7 @@ class Director:
         self._busy = False
         self._lock = threading.Lock()
         self._result = None
+        self._gen = 0                  # bumped on reset() to discard stale workers
         self._next_time = 2.0          # first decision shortly after start
         self.online = self.use_llm     # display: is the LLM responding?
         self.source = "llm" if self.use_llm else "auto"
@@ -74,6 +75,14 @@ class Director:
         if not self._busy:
             self._next_time = self.sim.time
 
+    def reset(self) -> None:
+        """Drop any in-flight/queued decision (e.g. after loading a save)."""
+        with self._lock:
+            self._result = None
+        self._gen += 1
+        self._busy = False
+        self._next_time = self.sim.time + 0.5
+
     def _start(self) -> None:
         report = build_report(self.sim)
         self.last_report = report
@@ -82,22 +91,24 @@ class Director:
         # immediately instead of waiting on the LLM's first (slow) reply.
         if self.use_llm and self.decisions > 0:
             self._busy = True
-            threading.Thread(target=self._worker, args=(report,), daemon=True).start()
+            threading.Thread(target=self._worker, args=(report, self._gen), daemon=True).start()
         else:
             self._deliver(report, fallback.decide(self.sim, report), "auto")
 
-    def _worker(self, report: dict) -> None:
+    def _worker(self, report: dict, gen: int) -> None:
         # Only the network call runs here; sim is NOT touched off the main thread.
         user = ("Game state report:\n" + json.dumps(report, separators=(",", ":"))
                 + "\n\nReply with JSON only.")
         try:
             decision = self.client.chat_json(SYSTEM_PROMPT, user)
             self.online = True
-            self._deliver(report, decision, "llm")
+            if gen == self._gen:
+                self._deliver(report, decision, "llm")
         except LLMError as e:
             self.online = False
-            self._deliver(report, None, "llm_failed",
-                          note=f"LLM unavailable ({e}); using heuristic director.")
+            if gen == self._gen:
+                self._deliver(report, None, "llm_failed",
+                              note=f"LLM unavailable ({e}); using heuristic director.")
 
     def _deliver(self, report, decision, source, note: str | None = None) -> None:
         with self._lock:

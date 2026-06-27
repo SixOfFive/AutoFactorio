@@ -20,6 +20,7 @@ def main(argv=None) -> int:
                     help="use the heuristic director only; never call the LLM")
     ap.add_argument("--seed", type=int, default=None, help="world generation seed")
     ap.add_argument("--config", default="config.json", help="path to a config JSON file")
+    ap.add_argument("--load", default=None, help="load a save file on startup")
     args = ap.parse_args(argv)
 
     # ensure the package is importable when launched as a bare script
@@ -34,7 +35,11 @@ def main(argv=None) -> int:
     if args.fallback:
         cfg.llm.enabled = False
 
-    App(cfg).run()
+    app = App(cfg)
+    if args.load and os.path.exists(args.load):
+        app.sim.load(args.load)
+        app.director.reset()
+    app.run()
     return 0
 
 

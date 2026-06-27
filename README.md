@@ -36,6 +36,8 @@ Real Factorio prevents collisions with **rail signals** and **chain signals** th
 | **`+` / `-`** | Game speed up / down |
 | **I** | Toggle the detail / inventory panel |
 | **L** | Toggle the LLM communications console |
+| **F5 / F9** | Quicksave / quickload (`saves/quicksave.json`) |
+| **N** | Force a director decision now |
 | **Esc** | Quit |
 
 ## Running it
@@ -53,6 +55,7 @@ Useful flags:
 - `--fallback` — run the heuristic director, never call the LLM
 - `--seed N` — fixed world seed
 - `--config path.json` — use a specific config file
+- `--load saves/quicksave.json` — resume a saved game
 
 ## The LLM director
 

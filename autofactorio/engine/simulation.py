@@ -290,6 +290,27 @@ class Simulation:
         self.log(f"Added {n} drill(s) to field #{field_id} (now {field.drills}).")
         return True, f"field #{field_id} drills now {field.drills}"
 
+    # ---- persistence ------------------------------------------------------
+    def save(self, path: str) -> tuple[bool, str]:
+        from .persistence import save_game
+        try:
+            save_game(self, path)
+            self.log(f"Game saved to {path}.")
+            return True, path
+        except Exception as e:                 # never let a save crash the game
+            self.log(f"Save failed: {e}")
+            return False, str(e)
+
+    def load(self, path: str) -> tuple[bool, str]:
+        from .persistence import load_into
+        try:
+            load_into(self, path)
+            self.log(f"Game loaded from {path}.")
+            return True, path
+        except Exception as e:
+            self.log(f"Load failed: {e}")
+            return False, str(e)
+
     # ---- snapshots --------------------------------------------------------
     def active_trains(self) -> int:
         return sum(1 for t in self.trains.values() if not t.stalled)

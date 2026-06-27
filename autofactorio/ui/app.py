@@ -9,10 +9,13 @@ Controls:
   I                  toggle detail panel
   L                  toggle comms console
   N                  force a director decision now
+  F5 / F9            quicksave / quickload
   Esc                quit
 """
 
 from __future__ import annotations
+
+import os
 
 import pygame
 
@@ -26,7 +29,10 @@ from .hud import Hud
 from .console import Console
 
 HINT = ("wheel: zoom   right-drag/WASD: pan   F: follow scout   Space: pause   "
-        "+/-: speed   I: details   L: comms   Esc: quit")
+        "+/-: speed   I: details   L: comms   F5/F9: save/load   Esc: quit")
+
+SAVE_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__)))), "saves", "quicksave.json")
 
 
 class App:
@@ -104,6 +110,15 @@ class App:
             self.show_console = not self.show_console
         elif e.key == pygame.K_n:
             self.director.force_decision()
+        elif e.key == pygame.K_F5:
+            self.sim.save(SAVE_PATH)
+        elif e.key == pygame.K_F9:
+            if os.path.exists(SAVE_PATH):
+                ok, _ = self.sim.load(SAVE_PATH)
+                if ok:
+                    self.director.reset()
+            else:
+                self.sim.log("No quicksave found (press F5 to save).")
         elif e.key in (pygame.K_PLUS, pygame.K_EQUALS, pygame.K_KP_PLUS):
             self.speed_idx = min(self.speed_idx + 1, len(balance.GAME_SPEEDS) - 1)
             self.sim.speed = balance.GAME_SPEEDS[self.speed_idx]
