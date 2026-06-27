@@ -211,7 +211,8 @@ FUEL_CRITICAL = 60                 # home coal below this triggers robot fuel ru
 # ---------------------------------------------------------------------------
 # Tech tree (researched in order; each spends its cost and applies its effect)
 # ---------------------------------------------------------------------------
-BASE_MAX_ROBOTS = 1                # explorer robots before Robotics research
+BASE_MAX_ROBOTS = 3                # up to 3 robots (explore + build + fight); the
+                                   # director deploys them from crafted stock
 
 TECHS = [
     {"name": "Mining Productivity 1", "cost": {"science_pack": 10},
@@ -226,12 +227,12 @@ TECHS = [
      "effect": {"rail_discount": 0.8}, "desc": "-20% rail cost per link"},
     {"name": "Mining Productivity 2", "cost": {"science_pack": 40},
      "effect": {"drill_mult": 1.5}, "desc": "+50% drill output"},
-    {"name": "Robotics 1", "cost": {"science_pack": 50},
-     "effect": {"max_robots": 1}, "desc": "+1 explorer robot"},
+    {"name": "Mining Productivity 3", "cost": {"science_pack": 50},
+     "effect": {"drill_mult": 1.5}, "desc": "+50% drill output"},
     {"name": "Cargo Capacity 2", "cost": {"science_pack": 64},
      "effect": {"wagon_capacity": 1.5}, "desc": "+50% wagon capacity"},
     {"name": "Train Braking 2", "cost": {"science_pack": 80},
      "effect": {"train_speed": 1.25, "train_accel": 1.3}, "desc": "faster trains"},
-    {"name": "Robotics 2", "cost": {"science_pack": 100},
-     "effect": {"max_robots": 1}, "desc": "+1 explorer robot (max 3)"},
+    {"name": "Electric Smelting 2", "cost": {"science_pack": 100},
+     "effect": {"furnace_mult": 1.5}, "desc": "+50% smelting speed"},
 ]

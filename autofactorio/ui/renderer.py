@@ -16,6 +16,7 @@ from .assets import Assets
 GRASS = (74, 116, 62)
 RAIL_BED = (52, 50, 54)
 RAIL_TOP = (150, 156, 165)
+GHOST_RAIL = (96, 110, 96)        # planned track a robot has not yet laid
 ARROW = (210, 214, 110)
 FOG = (7, 9, 14)
 SIG_GREEN = (90, 220, 110)
@@ -108,6 +109,9 @@ class Renderer:
             pts = [cam.world_to_screen(x, y) for (x, y) in e.points]
             if not any(self._on(cam, sx, sy, 40) for sx, sy in pts):
                 continue
+            if not e.built:                                   # planned/ghost track
+                pygame.draw.lines(screen, GHOST_RAIL, False, pts, max(1, top_w))
+                continue
             pygame.draw.lines(screen, RAIL_BED, False, pts, bed_w)
             pygame.draw.lines(screen, RAIL_TOP, False, pts, top_w)
             if draw_arrows and len(pts) >= 2:
@@ -144,6 +148,8 @@ class Renderer:
 
     def _fields(self, screen, cam, sim):
         for f in sim.fields.values():
+            if getattr(f, "state", "active") == "constructing":
+                continue                                  # drills not placed until built
             p = f.patch
             n = min(f.drills, 6)
             cols = 3

@@ -109,6 +109,8 @@ class Robots:
                 r.attack_cd -= dt
             if r.task == "repair":
                 self._do_repair(sim, r, dt)
+            elif r.task == "construct":
+                self._do_construct(sim, r, dt)
             elif r.task == "dismantle":
                 self._do_dismantle(sim, r, dt)
             elif r.task == "fuel":
@@ -127,14 +129,17 @@ class Robots:
 
     # ---- assignment -------------------------------------------------------
     def _assign(self, sim) -> None:
-        # keep robots that are mid-dismantle (already travelling / hauling) on task
+        # keep robots that are mid-job (constructing / dismantling) on task
         busy = set()
         for r in self.list.values():
-            if r.task == "dismantle" and r.dismantle_phase is not None:
+            keep = ((r.task == "construct" and r.target in sim.jobs) or
+                    (r.task == "dismantle" and r.dismantle_phase is not None))
+            if keep:
                 busy.add(r.id)
             else:
                 r.task = None
-        covered = {self.list[rid].target for rid in busy}
+        covered_jobs = {self.list[rid].target for rid in busy if self.list[rid].task == "construct"}
+        covered_fields = {self.list[rid].target for rid in busy if self.list[rid].task == "dismantle"}
         free = sorted((r for r in self.list.values() if r.id not in busy),
                       key=lambda r: (r.explorer, r.id))    # explorer last
         # 1. repair the most-damaged trains
@@ -150,9 +155,20 @@ class Robots:
             r.task = "repair"
             r.target = t.id
             free.remove(r)
-        # 2. dismantle fields whose trains are already stored (track tear-down)
+        # 2. build planned fields/loops (lay track + drills)
+        for job in sim.jobs.values():
+            if job.id in covered_jobs:
+                continue
+            if not free:
+                break
+            r = min(free, key=lambda r: (r.x - job.x) ** 2 + (r.y - job.y) ** 2)
+            r.task = "construct"
+            r.target = job.id
+            covered_jobs.add(job.id)
+            free.remove(r)
+        # 3. dismantle fields whose trains are already stored (track tear-down)
         for f in sim.fields.values():
-            if getattr(f, "state", "active") != "dismantling" or f.id in covered:
+            if getattr(f, "state", "active") != "dismantling" or f.id in covered_fields:
                 continue
             if not free:
                 break
@@ -160,13 +176,13 @@ class Robots:
             r.task = "dismantle"
             r.target = f.id
             r.dismantle_phase = "to_field"
-            covered.add(f.id)
+            covered_fields.add(f.id)
             free.remove(r)
-        # 3. emergency fuel (one robot) when coal is critically low
+        # 4. emergency fuel (one robot) when coal is critically low
         if sim.economy.inv.get("coal", 0) < balance.FUEL_CRITICAL and free:
             r = free.pop(0)
             r.task = "fuel"
-        # 4 & 5. remaining robots hunt nearby animals, else explore
+        # 5 & 6. remaining robots hunt nearby animals, else explore
         for r in free:
             target = None if r.explorer else sim.animals.nearest(r.x, r.y, balance.ROBOT_HUNT_RADIUS)
             if target is not None:
@@ -217,6 +233,20 @@ class Robots:
         d = r.move_toward(head[0], head[1], balance.ROBOT_SPEED, dt)
         if d <= balance.ROBOT_ATTACK_RANGE + 1.0:
             t.hp = min(t.max_hp, t.hp + balance.ROBOT_REPAIR_RATE * dt)
+
+    def _do_construct(self, sim, r: Robot, dt: float) -> None:
+        # travel to a planned field/loop and lay its track + drills, then the train
+        # gets dispatched.
+        job = sim.jobs.get(r.target)
+        if job is None:
+            r.task = "explore"
+            r.target = None
+            return
+        d = r.move_toward(job.x, job.y, balance.ROBOT_SPEED, dt)
+        if d <= 2.5:
+            sim.complete_job(job)
+            r.task = "explore"
+            r.target = None
 
     def _do_dismantle(self, sim, r: Robot, dt: float) -> None:
         # travel out to a decommissioned field, tear up its track + drills, and

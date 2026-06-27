@@ -43,11 +43,12 @@ def decide(sim, report) -> dict:
                 return field_action(p, f"Securing first {ore.replace('_', ' ')} field "
                                        f"(patch #{p.id}).")
 
-    # 1b. build a robot when wildlife pressures the base or we want a second unit
+    # 1b. deploy a robot when there's a construction backlog, wildlife pressure,
+    #     a damaged train, or we just want more than one unit
     stats = sim.stats()
-    if sim.can_build_robot() and (stats["animals"] > 6 or len(sim.robots) < 2
-                                  or stats["damaged_trains"] > 0):
-        return {"reasoning": "Building a robot for defense / repair / exploration.",
+    if sim.can_build_robot() and (len(sim.jobs) > len(sim.robots) or stats["animals"] > 6
+                                  or stats["damaged_trains"] > 0 or len(sim.robots) < 2):
+        return {"reasoning": "Deploying a robot (build/repair/defense/exploration).",
                 "actions": [{"action": "build_robot"}]}
 
     # 2. advance tech whenever the next level is affordable (science accumulates

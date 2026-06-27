@@ -29,6 +29,7 @@ class RailEdge:
     points: list[tuple[float, float]]       # world polyline a..b (tiles)
     length: float
     block_id: int = -1
+    built: bool = True                      # False = planned/ghost (robot still building)
 
 
 @dataclass

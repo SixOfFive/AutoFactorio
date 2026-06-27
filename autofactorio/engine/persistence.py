@@ -78,7 +78,7 @@ def save_game(sim, path: str) -> None:
             "counters": {"nid": net._nid, "eid": net._eid, "bid": net._bid, "sid": net._sid},
             "nodes": {str(k): list(v) for k, v in net.nodes.items()},
             "edges": {str(e.id): {"a": e.a, "b": e.b, "points": [list(p) for p in e.points],
-                                  "length": e.length, "block_id": e.block_id}
+                                  "length": e.length, "block_id": e.block_id, "built": e.built}
                       for e in net.edges.values()},
             "blocks": {str(b.id): {"edge_ids": b.edge_ids, "length": b.length}
                        for b in net.blocks.values()},
@@ -107,6 +107,14 @@ def save_game(sim, path: str) -> None:
                       for l in t.legs]}
             for t in sim.trains.values()
         ],
+        "jobs": {
+            "next_id": sim._jid,
+            "list": [{"id": j.id, "field_id": j.field_id, "x": j.x, "y": j.y,
+                      "edge_ids": list(j.edge_ids), "activates_field": j.activates_field,
+                      "legs": [{"edges": l.edges, "station_id": l.station_id, "wait": list(l.wait)}
+                               for l in j.legs]}
+                     for j in sim.jobs.values()],
+        },
         "events": sim.events[-60:],
     }
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
@@ -202,7 +210,8 @@ def load_into(sim, path: str) -> None:
     for k, ed in data["net"]["edges"].items():
         eid = int(k)
         net.edges[eid] = RailEdge(eid, ed["a"], ed["b"],
-                                  [tuple(p) for p in ed["points"]], ed["length"], ed["block_id"])
+                                  [tuple(p) for p in ed["points"]], ed["length"], ed["block_id"],
+                                  ed.get("built", True))
         net.out_edges.setdefault(ed["a"], []).append(eid)
     net.blocks = {int(k): Block(int(k), b["edge_ids"], b["length"], None)
                   for k, b in data["net"]["blocks"].items()}
@@ -243,7 +252,18 @@ def load_into(sim, path: str) -> None:
         t.idle_timer = st["idle_timer"]
         t.stalled = st["stalled"]
         t.hp = st.get("hp", t.max_hp)
+        t.recall = st.get("recall", False)
         sim.trains[st["id"]] = t
+
+    # construction jobs (robots still building these)
+    from .simulation import ConstructionJob
+    sim.jobs = {}
+    jdata = data.get("jobs", {})
+    for jd in jdata.get("list", []):
+        legs = [Leg(l["edges"], l["station_id"], tuple(l["wait"])) for l in jd["legs"]]
+        sim.jobs[jd["id"]] = ConstructionJob(jd["id"], jd["field_id"], jd["x"], jd["y"],
+                                             list(jd["edge_ids"]), legs, jd["activates_field"])
+    sim._jid = jdata.get("next_id", len(sim.jobs))
 
     sim.events = [tuple(ev) for ev in data.get("events", [])]
     sim._depleted_announced = {f.id for f in sim.fields.values() if f.patch.depleted}

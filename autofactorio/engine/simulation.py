@@ -9,6 +9,7 @@ compact state snapshot for the LLM report and the HUD.
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass, field as _field
 
 from .. import balance
 from .animals import Animals
@@ -27,6 +28,19 @@ LOAD_MAX_DWELL = 30.0  # secs a train will sit loading before leaving with a par
 HOME = (0, 0)
 
 
+@dataclass
+class ConstructionJob:
+    """A planned field/loop a robot must travel to and lay (track + drills) before
+    the train can run."""
+    id: int
+    field_id: int
+    x: float
+    y: float
+    edge_ids: list
+    legs: list
+    activates_field: bool
+
+
 class Simulation:
     def __init__(self, config):
         self.config = config
@@ -36,12 +50,15 @@ class Simulation:
         self.research = Research()
         self.robots = Robots()
         self.robots.add(0.0, 0.0, explorer=True)     # robot #0 explores the map
+        self.robots.add(0.0, 0.0, explorer=False)    # robot #1 builds/fights from the start
         self.animals = Animals(config.seed)
         self.fields: dict[int, MiningField] = {}
         self.trains: dict[int, Train] = {}
+        self.jobs: dict[int, ConstructionJob] = {}
         self.kills = 0
         self._fid = 0
         self._tid = 0
+        self._jid = 0
         self.time = 0.0
         self.speed = balance.DEFAULT_GAME_SPEED
         self.paused = False
@@ -250,25 +267,46 @@ class Simulation:
         field.edge_ids = list(out_e) + list(ret_e)
         field.station_ids = [load_st.id, unload_st.id]
         field.rail_used = rails_needed
+        field.state = "constructing"                 # a robot must lay it before it runs
+        for eid in field.edge_ids:                    # ghost the planned track
+            self.net.edges[eid].built = False
         load_st.field_id = fid
         load_st.name = f"{patch.ore}-{fid}-load"
         unload_st.name = f"home-{fid}-unload"
         patch.claimed = True
         self.fields[fid] = field
 
-        legs = [
-            Leg(out_e, load_st.id, ("full_cargo",)),
-            Leg(ret_e, unload_st.id, ("empty_cargo",)),
-        ]
-        tid = self._tid
-        self._tid += 1
-        self.trains[tid] = Train(tid, legs, balance.DEFAULT_WAGONS, self.net, self.research)
-
+        legs = [Leg(out_e, load_st.id, ("full_cargo",)),
+                Leg(ret_e, unload_st.id, ("empty_cargo",))]
+        self._new_job(fid, patch.cx, patch.cy, list(field.edge_ids), legs, activates_field=True)
         self.economy.spend(costs)
         self._deplete_nearer_fields(fid, math.dist(HOME, (patch.cx, patch.cy)))
-        self.log(f"Built {tier} mining field #{fid} on {patch.ore.replace('_', ' ')} "
-                 f"patch #{patch_id}; laid {rails_needed} rail, dispatched train #{tid}.")
-        return True, f"field #{fid} on patch #{patch_id} ({patch.ore})"
+        self.log(f"Field #{fid} planned on {patch.ore.replace('_', ' ')} patch #{patch_id}; "
+                 f"a robot will lay {rails_needed} rail and {field.drills} drills.")
+        return True, f"field #{fid} planned on patch #{patch_id} ({patch.ore})"
+
+    # ---- construction jobs (robots lay the track + drills) ----------------
+    def _new_job(self, field_id, x, y, edge_ids, legs, activates_field):
+        jid = self._jid
+        self._jid += 1
+        self.jobs[jid] = ConstructionJob(jid, field_id, float(x), float(y),
+                                         list(edge_ids), legs, activates_field)
+        return jid
+
+    def complete_job(self, job) -> None:
+        """A robot reached the build site: solidify the track and dispatch the train."""
+        for eid in job.edge_ids:
+            e = self.net.edges.get(eid)
+            if e is not None:
+                e.built = True
+        tid = self._tid
+        self._tid += 1
+        self.trains[tid] = Train(tid, job.legs, balance.DEFAULT_WAGONS, self.net, self.research)
+        field = self.fields.get(job.field_id)
+        if job.activates_field and field is not None:
+            field.state = "active"
+        self.jobs.pop(job.id, None)
+        self.log(f"Robot laid the track for field #{job.field_id}; train #{tid} dispatched.")
 
     def _deplete_nearer_fields(self, new_fid: int, new_dist: float) -> None:
         """Claiming a farther field accelerates depletion of the nearer ones in
@@ -311,16 +349,15 @@ class Simulation:
         field.edge_ids += list(out_e) + list(ret_e)      # reclaim this loop too
         field.station_ids += [load_st.id, unload_st.id]
         field.rail_used += rails_needed
-        legs = [
-            Leg(out_e, load_st.id, ("full_cargo",)),
-            Leg(ret_e, unload_st.id, ("empty_cargo",)),
-        ]
-        tid = self._tid
-        self._tid += 1
-        self.trains[tid] = Train(tid, legs, balance.DEFAULT_WAGONS, self.net, self.research)
+        for eid in list(out_e) + list(ret_e):            # ghost until a robot lays it
+            self.net.edges[eid].built = False
+        legs = [Leg(out_e, load_st.id, ("full_cargo",)),
+                Leg(ret_e, unload_st.id, ("empty_cargo",))]
+        self._new_job(field_id, patch.cx, patch.cy, list(out_e) + list(ret_e),
+                      legs, activates_field=False)
         self.economy.spend(costs)
-        self.log(f"Added a second loop + train #{tid} to field #{field_id}.")
-        return True, f"second train #{tid} added to field #{field_id}"
+        self.log(f"Second loop for field #{field_id} planned; a robot will lay the track.")
+        return True, f"second loop for field #{field_id} planned"
 
     def abandon_field(self, field_id: int) -> tuple[bool, str]:
         """Begin decommissioning a depleted field. This does NOT instantly remove

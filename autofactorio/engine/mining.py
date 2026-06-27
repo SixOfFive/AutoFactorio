@@ -27,8 +27,8 @@ class MiningField:
     edge_ids: list = field(default_factory=list)
     station_ids: list = field(default_factory=list)
     rail_used: int = 0
-    # decommission lifecycle: active -> recalling (trains heading home to storage)
-    # -> dismantling (a robot is tearing up the track) -> removed
+    # lifecycle: constructing (a robot is laying track + drills) -> active ->
+    # recalling (trains heading home to storage) -> dismantling -> removed
     state: str = "active"
 
     @property

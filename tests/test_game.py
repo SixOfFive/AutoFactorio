@@ -26,6 +26,22 @@ def _run(sim, director=None, seconds=60, dt=1 / 60):
             director.update()
 
 
+def _settle(sim, max_s=60):
+    """Tick until robots have finished all pending construction jobs."""
+    for _ in range(int(max_s / (1 / 60))):
+        if not sim.jobs:
+            return
+        sim.tick(1 / 60)
+    assert not sim.jobs, "construction jobs did not complete"
+
+
+def _build_active(sim, patch_id, max_s=60):
+    """Order a field and let a robot physically build it, then return."""
+    ok, msg = sim.build_field(patch_id)
+    assert ok, msg
+    _settle(sim, max_s)
+
+
 # ---- world / bootstrap ----------------------------------------------------
 def test_starter_patches_discovered():
     sim = Simulation(Config())
@@ -78,8 +94,9 @@ def test_decommission_stores_train_then_robot_reclaims_track():
     iron = next(p for p in sim.world.discovered_patches() if p.ore == "iron_ore")
     locos_before = sim.economy.inv.get("locomotive", 0)
     rail_before = sim.economy.inv.get("rail", 0)
-    sim.build_field(iron.id)
+    _build_active(sim, iron.id)                      # robot lays the track first
     assert sim.economy.inv.get("locomotive", 0) == locos_before - 1
+    assert len(sim.trains) == 1
     f = sim.fields[0]
     edges = list(f.edge_ids)
     f.patch.reserve = 0
@@ -101,7 +118,7 @@ def test_decommission_stores_train_then_robot_reclaims_track():
 def test_abandon_is_idempotent_and_non_destructive_at_start():
     sim = Simulation(Config())
     iron = next(p for p in sim.world.discovered_patches() if p.ore == "iron_ore")
-    sim.build_field(iron.id)
+    _build_active(sim, iron.id)
     f = sim.fields[0]
     edges = list(f.edge_ids)
     f.patch.reserve = 0
@@ -155,6 +172,26 @@ def test_save_load_roundtrip(tmp_path):
     assert sim2.stats()["delivered"] >= before["delivered"]
 
 
+def test_save_load_preserves_construction_job(tmp_path):
+    cfg = Config()
+    sim = Simulation(cfg)
+    iron = next(p for p in sim.world.discovered_patches() if p.ore == "iron_ore")
+    ok, _ = sim.build_field(iron.id)
+    assert ok and sim.jobs and sim.fields[0].state == "constructing"
+    path = str(tmp_path / "mid.json")
+    sim.save(path)
+
+    sim2 = Simulation(Config(seed=cfg.seed))
+    ok, _ = sim2.load(path)
+    assert ok
+    assert len(sim2.jobs) == len(sim.jobs)
+    assert sim2.fields[0].state == "constructing"
+    assert any(not e.built for e in sim2.net.edges.values())   # ghost track preserved
+    # resume: a robot finishes the build and the train is dispatched
+    _settle(sim2, 60)
+    assert sim2.fields[0].state == "active" and len(sim2.trains) == 1
+
+
 def test_load_rebuilds_world_on_seed_mismatch(tmp_path):
     cfg = Config(seed=4242)
     sim = Simulation(cfg)
@@ -182,23 +219,23 @@ def test_animal_dies_from_damage():
 
 
 def test_robot_build_cap_and_replaceable():
-    sim = Simulation(Config())
-    # default: 1 robot, cap 1 -> cannot build or replace
+    sim = Simulation(Config())            # starts with 2 robots, cap 3
+    assert len(sim.robots) == 2
+    assert sim.can_replace_robot()        # a spare already exists (2 robots)
+    # no robot assembled in stock yet -> cannot deploy a new one
     assert not sim.can_build_robot()
-    assert not sim.can_replace_robot()
-    sim.research.max_robots = 2
     sim.economy.inv["robot"] = 2          # assembled and ready to deploy
-    assert sim.can_build_robot() and sim.can_replace_robot()
+    assert sim.can_build_robot()
     ok, _ = sim.build_robot()
-    assert ok and len(sim.robots) == 2
-    ok, _ = sim.build_robot()              # at cap now
-    assert not ok and len(sim.robots) == 2
+    assert ok and len(sim.robots) == 3
+    ok, _ = sim.build_robot()              # at cap (3) now
+    assert not ok and len(sim.robots) == 3
 
 
 def test_train_crushes_animal_and_takes_damage():
     sim = Simulation(Config())
     iron = next(p for p in sim.world.discovered_patches() if p.ore == "iron_ore")
-    sim.build_field(iron.id)
+    _build_active(sim, iron.id)
     t = next(iter(sim.trains.values()))
     t.state = "moving"
     head = t.car_poses()[0]
@@ -212,7 +249,7 @@ def test_train_crushes_animal_and_takes_damage():
 def test_robot_repairs_damaged_train():
     sim = Simulation(Config())
     iron = next(p for p in sim.world.discovered_patches() if p.ore == "iron_ore")
-    sim.build_field(iron.id)
+    _build_active(sim, iron.id)
     t = next(iter(sim.trains.values()))
     t.hp = 10.0
     r = sim.robots.explorer()
@@ -266,7 +303,7 @@ def test_research_advances_and_applies():
 def test_research_lifts_existing_trains():
     sim = Simulation(Config())
     iron = next(p for p in sim.world.discovered_patches() if p.ore == "iron_ore")
-    sim.build_field(iron.id)
+    _build_active(sim, iron.id)
     t = next(iter(sim.trains.values()))
     base_cap = t.capacity
     for i in range(3):                            # through Cargo Capacity 1
@@ -281,7 +318,7 @@ def test_research_lifts_existing_trains():
 def test_cannot_abandon_productive_field():
     sim = Simulation(Config())
     iron = next(p for p in sim.world.discovered_patches() if p.ore == "iron_ore")
-    sim.build_field(iron.id)
+    _build_active(sim, iron.id)
     ok, msg = sim.abandon_field(0)                # patch still has ore
     assert not ok
     assert 0 in sim.fields                        # field preserved
@@ -291,7 +328,7 @@ def test_cannot_abandon_productive_field():
 def test_train_waits_for_obstacle_ahead():
     sim = Simulation(Config())
     iron = next(p for p in sim.world.discovered_patches() if p.ore == "iron_ore")
-    sim.build_field(iron.id)
+    _build_active(sim, iron.id)
     t = next(iter(sim.trains.values()))
     t.state = "moving"
     t.fuel_seconds = 100.0
@@ -334,8 +371,10 @@ def test_explorer_spiral_restarts_from_home():
 def test_two_trains_one_lane_never_share_a_block():
     sim = Simulation(Config())
     iron = next(p for p in sim.world.discovered_patches() if p.ore == "iron_ore")
-    sim.build_field(iron.id)
-    sim.add_train(0)               # two trains on the same dedicated loop
+    _build_active(sim, iron.id)
+    sim.add_train(0)               # second loop to the same field
+    _settle(sim)                   # let a robot lay the second loop
+    assert len(sim.trains) == 2
     dt = 1 / 60
     for _ in range(int(240 / dt)):
         sim.tick(dt)
