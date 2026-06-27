@@ -17,7 +17,7 @@ SMELT_RECIPES = {
     "iron_plate":   {"in": {"iron_ore": 1},   "out": {"iron_plate": 1},   "time": 3.2},
     "copper_plate": {"in": {"copper_ore": 1}, "out": {"copper_plate": 1}, "time": 3.2},
     "stone_brick":  {"in": {"stone": 2},       "out": {"stone_brick": 1},  "time": 3.2},
-    "steel_plate":  {"in": {"iron_plate": 5}, "out": {"steel_plate": 1},  "time": 16.0},
+    "steel_plate":  {"in": {"iron_plate": 5}, "out": {"steel_plate": 1},  "time": 6.0},
 }
 FURNACE_SPEED = {"stone": 1.0, "electric": 2.0}   # effective time = recipe.time / speed
 
@@ -29,7 +29,7 @@ RECIPES = {
     "iron_gear":          {"in": {"iron_plate": 2},                        "out": {"iron_gear": 1},          "time": 0.5},
     "copper_cable":       {"in": {"copper_plate": 1},                      "out": {"copper_cable": 2},       "time": 0.5},
     "electronic_circuit": {"in": {"iron_plate": 1, "copper_cable": 3},     "out": {"electronic_circuit": 1}, "time": 0.5},
-    "engine_unit":        {"in": {"iron_gear": 1, "steel_plate": 1, "iron_plate": 2}, "out": {"engine_unit": 1}, "time": 10.0},
+    "engine_unit":        {"in": {"iron_gear": 1, "steel_plate": 1, "iron_plate": 2}, "out": {"engine_unit": 1}, "time": 2.0},
     # buildables
     "rail":          {"in": {"iron_stick": 1, "steel_plate": 1, "stone": 1},                       "out": {"rail": 2},          "time": 0.5},
     "rail_signal":   {"in": {"electronic_circuit": 1, "iron_plate": 5},                            "out": {"rail_signal": 1},   "time": 0.5},
@@ -38,8 +38,10 @@ RECIPES = {
     "electric_drill":{"in": {"electronic_circuit": 3, "iron_gear": 5, "iron_plate": 10},           "out": {"electric_drill": 1},"time": 2.0},
     "stone_furnace": {"in": {"stone": 5},                                                          "out": {"stone_furnace": 1}, "time": 0.5},
     "assembler":     {"in": {"electronic_circuit": 3, "iron_gear": 5, "iron_plate": 9},            "out": {"assembler": 1},     "time": 0.5},
-    "locomotive":    {"in": {"electronic_circuit": 10, "engine_unit": 20, "steel_plate": 30},      "out": {"locomotive": 1},    "time": 4.0},
-    "cargo_wagon":   {"in": {"iron_gear": 10, "iron_plate": 20, "steel_plate": 20},                "out": {"cargo_wagon": 1},   "time": 1.0},
+    # Rolling stock cheapened vs vanilla (loco was 20 engine units) so a trickle
+    # economy can actually afford to expand - the whole point is watchable growth.
+    "locomotive":    {"in": {"electronic_circuit": 4, "engine_unit": 6, "steel_plate": 12},        "out": {"locomotive": 1},    "time": 2.0},
+    "cargo_wagon":   {"in": {"iron_gear": 6, "iron_plate": 12, "steel_plate": 8},                  "out": {"cargo_wagon": 1},   "time": 1.0},
 }
 
 # Friendly display names + which sprite represents an item on the map (if any).
@@ -57,7 +59,7 @@ DISPLAY_NAME = {
 # ---------------------------------------------------------------------------
 # Mining / smelting rates
 # ---------------------------------------------------------------------------
-DRILL_RATE = {"burner": 0.25, "electric": 0.5}    # ore/sec per drill
+DRILL_RATE = {"burner": 0.8, "electric": 2.0}     # ore/sec per drill (arcade-tuned for pace)
 DEFAULT_FIELD_DRILLS = 4                           # drills auto-placed per new field
 DEFAULT_FIELD_FURNACES = 0                         # smelting happens at home, not the field
 
@@ -90,36 +92,40 @@ OCCUPANCY_PENALTY = 1000           # added to route cost for a locked block
 # ---------------------------------------------------------------------------
 # Starting inventory (bootstraps the whole loop)
 # ---------------------------------------------------------------------------
+# Enough to stand up all four resource types (iron, copper, coal, stone) as the
+# first fields, plus seed materials - this avoids a bootstrap deadlock where a new
+# field needs a locomotive but a locomotive needs copper from a field you can't
+# yet build. The user explicitly asked to "start with enough materials".
 STARTING_INVENTORY = {
-    "burner_drill": 8,
+    "burner_drill": 16,
     "electric_drill": 0,
     "stone_furnace": 16,
-    "coal": 500,
+    "coal": 600,
     "assembler": 4,
-    "train_stop": 6,
-    "rail": 120,
-    "rail_signal": 20,
-    "chain_signal": 8,
-    "locomotive": 1,
-    "cargo_wagon": 2,
-    "iron_plate": 200,
-    "copper_plate": 100,
-    "steel_plate": 50,
-    "stone": 100,
+    "train_stop": 10,
+    "rail": 250,
+    "rail_signal": 30,
+    "chain_signal": 12,
+    "locomotive": 4,
+    "cargo_wagon": 8,
+    "iron_plate": 300,
+    "copper_plate": 250,
+    "steel_plate": 100,
+    "stone": 200,
 }
 
 # Home production capacity the base starts with (auto-crafts toward targets below).
 HOME_START = {
-    "furnaces": 16,        # stone-furnace equivalents at home for smelting ore->plate
-    "assemblers": 4,       # assemblers for the crafting chain
+    "furnaces": 20,        # stone-furnace equivalents at home for smelting ore->plate
+    "assemblers": 6,       # assemblers for the crafting chain
 }
 
 # The auto-crafter keeps roughly this much of each buildable in stock; the
 # director spends the surplus to expand. Tunes how "ready" the base feels.
 STOCK_TARGETS = {
-    "rail": 200, "rail_signal": 30, "chain_signal": 12,
-    "electric_drill": 8, "train_stop": 6, "assembler": 2,
-    "stone_furnace": 8, "locomotive": 2, "cargo_wagon": 4,
+    "rail": 250, "rail_signal": 30, "chain_signal": 12,
+    "electric_drill": 8, "train_stop": 8, "assembler": 2,
+    "stone_furnace": 8, "locomotive": 3, "cargo_wagon": 6,
 }
 
 # ---------------------------------------------------------------------------

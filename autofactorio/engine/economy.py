@@ -88,12 +88,20 @@ class Economy:
                 self._smelt_bank -= rec["time"]
 
     def _craft(self) -> None:
-        for item in _BUILD_ORDER:
-            target = balance.STOCK_TARGETS.get(item, 0)
-            guard = 0
-            while self.inv.get(item, 0) < target and self._craft_bank > 0 and guard < 200:
-                guard += 1
-                if not self._try_craft(item, depth=0):
+        # Round-robin across all buildables so an expensive item at the end of the
+        # list (locomotives, wagons) still gets budget instead of being starved by
+        # the hungry early targets (rails, drills). One unit per item per pass.
+        guard = 0
+        progress = True
+        while self._craft_bank > 0 and progress and guard < 500:
+            guard += 1
+            progress = False
+            for item in _BUILD_ORDER:
+                if self.inv.get(item, 0) >= balance.STOCK_TARGETS.get(item, 0):
+                    continue
+                if self._try_craft(item, depth=0):
+                    progress = True
+                if self._craft_bank <= 0:
                     break
 
     def _try_craft(self, item: str, depth: int) -> bool:

@@ -131,6 +131,29 @@ class Simulation:
         train.fuel_seconds += got * balance.COAL_BURN_SECONDS
 
     # ---- build actions (the deterministic autopilot) ----------------------
+    def choose_tier(self) -> str:
+        return ("electric" if self.economy.inv.get("electric_drill", 0) >= balance.DEFAULT_FIELD_DRILLS
+                else "burner")
+
+    def field_cost(self, patch, tier: str) -> dict[str, int]:
+        drill_item = "electric_drill" if tier == "electric" else "burner_drill"
+        dist = math.dist(HOME, (patch.cx, patch.cy))
+        rails_needed = int(dist * 1.15) + 10
+        signals_needed = max(2, rails_needed // balance.SIGNAL_SPACING)
+        return {
+            drill_item: balance.DEFAULT_FIELD_DRILLS,
+            "train_stop": 2,
+            "rail": rails_needed,
+            "rail_signal": signals_needed,
+            "locomotive": 1,
+            "cargo_wagon": balance.DEFAULT_WAGONS,
+        }
+
+    def can_build_field(self, patch) -> bool:
+        if patch is None or patch.claimed or patch.depleted or not patch.discovered:
+            return False
+        return self.economy.have(self.field_cost(patch, self.choose_tier()))
+
     def build_field(self, patch_id: int, tier: str | None = None) -> tuple[bool, str]:
         patch = self.world.patch_by_id(patch_id)
         if patch is None:
@@ -141,20 +164,10 @@ class Simulation:
             return False, f"patch #{patch_id} not available"
 
         if tier not in ("burner", "electric"):
-            tier = "electric" if self.economy.inv.get("electric_drill", 0) >= balance.DEFAULT_FIELD_DRILLS else "burner"
-        drill_item = "electric_drill" if tier == "electric" else "burner_drill"
+            tier = self.choose_tier()
 
-        dist = math.dist(HOME, (patch.cx, patch.cy))
-        rails_needed = int(dist * 1.15) + 10
-        signals_needed = max(2, rails_needed // balance.SIGNAL_SPACING)
-        costs = {
-            drill_item: balance.DEFAULT_FIELD_DRILLS,
-            "train_stop": 2,
-            "rail": rails_needed,
-            "rail_signal": signals_needed,
-            "locomotive": 1,
-            "cargo_wagon": balance.DEFAULT_WAGONS,
-        }
+        rails_needed = self.field_cost(patch, tier)["rail"]
+        costs = self.field_cost(patch, tier)
         if not self.economy.have(costs):
             missing = {k: v for k, v in costs.items() if self.economy.inv.get(k, 0) < v}
             return False, f"insufficient materials for field: need {missing}"
