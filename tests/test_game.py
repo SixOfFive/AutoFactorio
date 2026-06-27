@@ -265,6 +265,64 @@ def test_cannot_abandon_productive_field():
     assert 0 in sim.fields                        # field preserved
 
 
+# ---- train-vs-train collision avoidance -----------------------------------
+def test_train_waits_for_obstacle_ahead():
+    sim = Simulation(Config())
+    iron = next(p for p in sim.world.discovered_patches() if p.ore == "iron_ore")
+    sim.build_field(iron.id)
+    t = next(iter(sim.trains.values()))
+    t.state = "moving"
+    t.fuel_seconds = 100.0
+    hx, hy, _, _ = t.car_poses()[0]
+    before = t.head_s
+    t.update_movement(1 / 60, sim.net, obstacles=[(hx, hy)])   # obstacle right on us
+    assert t.waiting_for_train
+    assert t.head_s == before                                   # did not advance
+    # with no obstacle it moves
+    t.update_movement(1 / 60, sim.net, obstacles=[])
+    assert t.head_s > before
+
+
+# ---- field lifecycle: proportional depletion + track reclamation ----------
+def test_farther_field_depletes_nearer_ones():
+    sim = Simulation(Config())
+    iron = next(p for p in sim.world.discovered_patches() if p.ore == "iron_ore")
+    sim.build_field(iron.id)
+    near = sim.fields[0].patch
+    before = near.reserve
+    sim._deplete_nearer_fields(new_fid=999, new_dist=120.0)
+    assert near.reserve < before
+
+
+def test_abandon_reclaims_track_materials():
+    sim = Simulation(Config())
+    iron = next(p for p in sim.world.discovered_patches() if p.ore == "iron_ore")
+    sim.build_field(iron.id)
+    f = sim.fields[0]
+    edges = list(f.edge_ids)
+    assert edges and all(e in sim.net.edges for e in edges)
+    rail_before = sim.economy.inv.get("rail", 0)
+    f.patch.reserve = 0
+    ok, _ = sim.abandon_field(0)
+    assert ok
+    assert all(e not in sim.net.edges for e in edges)          # track torn up
+    assert sim.economy.inv.get("rail", 0) > rail_before        # rail reclaimed
+
+
+def test_explorer_spiral_restarts_from_home():
+    from autofactorio.engine.robots import Robot
+    r = Robot(0, 0.0, 0.0, explorer=True)
+    prev = r.radius
+    restarted = False
+    for _ in range(3000):
+        r._advance_spiral()
+        if r.radius < prev - 1.0:        # radius dropped sharply -> spiral reset
+            restarted = True
+            break
+        prev = r.radius
+    assert restarted
+
+
 # ---- block-mutex collision safety ----------------------------------------
 def test_two_trains_one_lane_never_share_a_block():
     sim = Simulation(Config())

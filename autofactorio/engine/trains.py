@@ -42,6 +42,7 @@ class Train:
         self.wait_timer = 0.0
         self.idle_timer = 0.0            # seconds since last cargo transfer
         self.stalled = False             # out of fuel mid-track
+        self.waiting_for_train = False   # yielding to another train ahead
         self.locked: set[int] = set()
         # current-leg cached geometry
         self._pts: list[tuple[float, float]] = []
@@ -110,7 +111,7 @@ class Train:
         return ids
 
     # ---- movement ---------------------------------------------------------
-    def update_movement(self, dt: float, net: RailNetwork) -> None:
+    def update_movement(self, dt: float, net: RailNetwork, obstacles=None) -> None:
         if self.state != "moving":
             return
         if self.fuel_seconds <= 0:
@@ -134,6 +135,23 @@ class Train:
                 bstart = self._block_start(front_block_after)
                 target = max(self.head_s, bstart - 0.05)
                 self.speed = 0.0
+
+        # train-vs-train avoidance: wait if a higher-priority train's car sits on
+        # the track just ahead (covers crossings between different loops and
+        # departing a station into a crash).
+        if obstacles:
+            look = min(self.leg_len, target + balance.TRAIN_LOOKAHEAD)
+            hx, hy, _ = _point_at(self._pts, self._cum, target)
+            bx, by, _ = _point_at(self._pts, self._cum, look)
+            cd2 = balance.TRAIN_COLLISION_DIST ** 2
+            for ox, oy in obstacles:
+                if (hx - ox) ** 2 + (hy - oy) ** 2 < cd2 or (bx - ox) ** 2 + (by - oy) ** 2 < cd2:
+                    target = self.head_s            # hold position and wait
+                    self.speed = 0.0
+                    self.waiting_for_train = True
+                    break
+            else:
+                self.waiting_for_train = False
 
         moved = target - self.head_s
         if moved > 0:

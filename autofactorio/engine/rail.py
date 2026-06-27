@@ -217,6 +217,21 @@ class RailNetwork:
         self.stations[sid] = st
         return st
 
+    # ---- removal (reclaiming a depleted field's track) --------------------
+    def remove_edges(self, edge_ids) -> None:
+        for eid in edge_ids:
+            e = self.edges.pop(eid, None)
+            if e is None:
+                continue
+            lst = self.out_edges.get(e.a)
+            if lst and eid in lst:
+                lst.remove(eid)
+            self.blocks.pop(e.block_id, None)
+            self.signals.pop(e.a, None)
+
+    def remove_station(self, sid: int) -> None:
+        self.stations.pop(sid, None)
+
     # ---- routing (Dijkstra over directed edges; used for flexible links) --
     def route(self, a: int, b: int) -> list[int] | None:
         """Cheapest directed edge path a->b, penalizing occupied blocks."""

@@ -46,6 +46,11 @@ class Robot:
         self.angle += dtheta
         if self.radius < max_r:
             self.radius = min(max_r, self.radius + balance.SCOUT_REVEAL_RADIUS * dtheta / (2 * math.pi) * 6)
+        else:
+            # finished an outward spiral: head back near home and spiral out again
+            # on a rotated arm, so repeated passes fill in any remaining fog gaps.
+            self.radius = float(balance.SCOUT_REVEAL_RADIUS)
+            self.angle += 2.39996                      # golden-angle offset for fresh coverage
         self.tx, self.ty = self._spiral_target()
 
     def move_toward(self, tx: float, ty: float, speed: float, dt: float) -> float:

@@ -90,7 +90,8 @@ def save_game(sim, path: str) -> None:
         "fields": [
             {"id": f.id, "patch_id": f.patch.id, "drills": f.drills, "tier": f.tier,
              "load_station_id": f.load_station_id, "buffer": f.buffer,
-             "buffer_cap": f.buffer_cap}
+             "buffer_cap": f.buffer_cap, "edge_ids": list(f.edge_ids),
+             "station_ids": list(f.station_ids), "rail_used": f.rail_used}
             for f in sim.fields.values()
         ],
         "trains": [
@@ -213,6 +214,9 @@ def load_into(sim, path: str) -> None:
         patch = pmap[sf["patch_id"]]
         fld = MiningField(sf["id"], patch, sf["drills"], sf["tier"], sf["load_station_id"],
                           sf["buffer"], sf["buffer_cap"])
+        fld.edge_ids = list(sf.get("edge_ids", []))
+        fld.station_ids = list(sf.get("station_ids", []))
+        fld.rail_used = sf.get("rail_used", 0)
         sim.fields[sf["id"]] = fld
 
     # trains (rebuild geometry, then restore dynamic state)

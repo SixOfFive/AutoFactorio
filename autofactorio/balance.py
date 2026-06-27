@@ -69,6 +69,13 @@ DEFAULT_FIELD_FURNACES = 0                         # smelting happens at home, n
 # Patch default reserves by ore type (finite -> forces expansion).
 PATCH_RESERVE = {"iron_ore": 25000, "copper_ore": 15000, "coal": 20000, "stone": 12000}
 
+# When a farther field is claimed, nearer fields lose up to this fraction of their
+# remaining reserve (scaled by how much closer they are) - pushes the frontier out.
+EXPANSION_DEPLETE_K = 0.20
+
+# Fraction of a reclaimed field's track materials refunded when it is abandoned.
+RECLAIM_REFUND = 0.5
+
 # ---------------------------------------------------------------------------
 # Trains
 # ---------------------------------------------------------------------------
@@ -85,6 +92,12 @@ MAX_TRAIN_LEN = 15                 # 1 loco + 2 wagons + couplings (used for blo
 COAL_BURN_SECONDS = 6.67           # run-seconds added per 1 coal
 LOCO_FUEL_SLOTS = 3                # max coal a loco holds
 LOCO_START_FUEL = 3               # coal a freshly-built loco carries
+
+# Train-vs-train collision avoidance: a train yields to any LOWER-id train whose
+# car comes within COLLISION_DIST of the path just ahead, waiting until it clears
+# (handles crossings between different fields' loops, and departing into a crash).
+TRAIN_COLLISION_DIST = 3.2         # tiles
+TRAIN_LOOKAHEAD = 4.0              # tiles ahead the head checks for obstacles
 
 # ---------------------------------------------------------------------------
 # Rail network

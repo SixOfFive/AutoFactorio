@@ -23,6 +23,10 @@ class MiningField:
     buffer: int = 0
     buffer_cap: int = 8000
     _accum: float = 0.0
+    # for track reclamation when the field is abandoned
+    edge_ids: list = field(default_factory=list)
+    station_ids: list = field(default_factory=list)
+    rail_used: int = 0
 
     @property
     def ore(self) -> str:

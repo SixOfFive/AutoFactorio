@@ -78,8 +78,15 @@ class Simulation:
         self.economy.research_furnace_mult = self.research.furnace_mult
         self.economy.update(dt)
 
-        for t in self.trains.values():
-            t.update_movement(dt, self.net)
+        # snapshot car positions so trains can see each other and yield (lower id
+        # has right of way -> the lowest-id train in any conflict always moves, so
+        # there is no deadlock).
+        positions = {tid: t.car_poses() for tid, t in self.trains.items()}
+        for tid in sorted(self.trains.keys()):
+            t = self.trains[tid]
+            obstacles = [(x, y) for otid, poses in positions.items() if otid < tid
+                         for (x, y, _a, _k) in poses]
+            t.update_movement(dt, self.net, obstacles)
             if t.state == "waiting":
                 self._service_station(t, dt)
         self._crush_animals()
@@ -234,6 +241,9 @@ class Simulation:
         fid = self._fid
         self._fid += 1
         field = MiningField(fid, patch, balance.DEFAULT_FIELD_DRILLS, tier, load_st.id)
+        field.edge_ids = list(out_e) + list(ret_e)
+        field.station_ids = [load_st.id, unload_st.id]
+        field.rail_used = rails_needed
         load_st.field_id = fid
         load_st.name = f"{patch.ore}-{fid}-load"
         unload_st.name = f"home-{fid}-unload"
@@ -249,9 +259,24 @@ class Simulation:
         self.trains[tid] = Train(tid, legs, balance.DEFAULT_WAGONS, self.net, self.research)
 
         self.economy.spend(costs)
+        self._deplete_nearer_fields(fid, math.dist(HOME, (patch.cx, patch.cy)))
         self.log(f"Built {tier} mining field #{fid} on {patch.ore.replace('_', ' ')} "
                  f"patch #{patch_id}; laid {rails_needed} rail, dispatched train #{tid}.")
         return True, f"field #{fid} on patch #{patch_id} ({patch.ore})"
+
+    def _deplete_nearer_fields(self, new_fid: int, new_dist: float) -> None:
+        """Claiming a farther field accelerates depletion of the nearer ones in
+        proportion to how much closer they are - the frontier moves outward and
+        old close fields run dry (then their track is reclaimed on abandon)."""
+        if new_dist <= 0:
+            return
+        for other in self.fields.values():
+            if other.id == new_fid:
+                continue
+            od = math.dist(HOME, (other.patch.cx, other.patch.cy))
+            if od < new_dist:
+                frac = balance.EXPANSION_DEPLETE_K * (1.0 - od / new_dist)
+                other.patch.reserve = max(0, int(other.patch.reserve * (1.0 - frac)))
 
     def add_train(self, field_id: int) -> tuple[bool, str]:
         """Add throughput to a field by building a SECOND independent parallel
@@ -277,6 +302,9 @@ class Simulation:
         load_st.field_id = field_id
         load_st.name = f"{patch.ore}-{field_id}-load2"
         unload_st.name = f"home-{field_id}-unload2"
+        field.edge_ids += list(out_e) + list(ret_e)      # reclaim this loop too
+        field.station_ids += [load_st.id, unload_st.id]
+        field.rail_used += rails_needed
         legs = [
             Leg(out_e, load_st.id, ("full_cargo",)),
             Leg(ret_e, unload_st.id, ("empty_cargo",)),
@@ -314,13 +342,28 @@ class Simulation:
                 salvaged_wagons += t.wagons
                 del self.trains[tid]
                 removed += 1
+        # tear up the track and recover materials
+        self.net.remove_edges(field.edge_ids)
+        for sid in field.station_ids:
+            self.net.remove_station(sid)
+        rail_back = int(field.rail_used * balance.RECLAIM_REFUND)
+        stops_back = max(0, int(len(field.station_ids) * balance.RECLAIM_REFUND))
+        drill_item = "electric_drill" if field.tier == "electric" else "burner_drill"
+        drills_back = int(field.drills * balance.RECLAIM_REFUND)
+        if rail_back:
+            self.economy.add("rail", rail_back)
+        if stops_back:
+            self.economy.add("train_stop", stops_back)
+        if drills_back:
+            self.economy.add(drill_item, drills_back)
+
         del self.fields[field_id]
         self._depleted_announced.discard(field_id)
         if not field.patch.depleted:
             field.patch.claimed = False           # reclaimable if ore remains
-        self.log(f"Abandoned field #{field_id}; salvaged {removed} locomotive(s) "
-                 f"and {salvaged_wagons} wagon(s).")
-        return True, f"abandoned field #{field_id} (salvaged {removed} train(s))"
+        self.log(f"Abandoned field #{field_id}; tore up track (+{rail_back} rail) and "
+                 f"salvaged {removed} locomotive(s), {salvaged_wagons} wagon(s).")
+        return True, f"abandoned field #{field_id} (reclaimed {rail_back} rail, {removed} train(s))"
 
     def research_next(self) -> tuple[bool, str]:
         """Research the next tech if its cost is in stock; applies the effect and
