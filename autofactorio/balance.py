@@ -159,7 +159,7 @@ MAP_RADIUS = 160                   # half-size of the square map in tiles
 SCOUT_REVEAL_RADIUS = 9            # tiles revealed around the explorer robot
 SCOUT_SPEED = 6.0                  # tiles/sec (explorer robot)
 PATCH_COUNT = 60                   # ore patches scattered across the map
-PATCH_MIN_RING = 18                # nearest patch distance from HQ (tiles)
+PATCH_MIN_RING = 30                # barren ring around HQ; nearest patches start here
 PATCH_RADIUS = (2, 4)             # patch footprint radius range (tiles)
 ORE_WEIGHTS = {"iron_ore": 0.42, "copper_ore": 0.24, "coal": 0.20, "stone": 0.14}
 

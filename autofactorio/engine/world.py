@@ -51,10 +51,14 @@ class World:
         self.patches: list[OrePatch] = []
         self.decor: list[tuple[int, int, str]] = []   # (tx, ty, 'tree'|'rock') scenery
         self.hq = (0, 0)
+        self._starter_count = 0
         self._gen_patches()
         self._gen_decor()
-        # reveal a generous area around HQ so the player starts with room to build
-        self.reveal(0, 0, balance.SCOUT_REVEAL_RADIUS * 2)
+        # The base sits in a barren clearing: reveal only a small home area, then
+        # reveal each (now-distant) starter patch so the first tracks must be long.
+        self.reveal(0, 0, balance.SCOUT_REVEAL_RADIUS)
+        for p in self.patches[:self._starter_count]:
+            self.reveal(p.cx, p.cy, balance.SCOUT_REVEAL_RADIUS - 1)
 
     # ---- coordinate helpers ----------------------------------------------
     def in_bounds(self, tx: int, ty: int) -> bool:
@@ -76,13 +80,22 @@ class World:
         weights /= weights.sum()
         placed: list[tuple[int, int, int]] = []  # (cx, cy, radius)
         pid = 0
-        # Guaranteed starters near HQ (within the initial reveal) so the logistics
-        # loop can bootstrap immediately: iron to build with, coal to fuel trains.
-        for ore, (cx, cy) in (("iron_ore", (14, 6)), ("coal", (-8, 14))):
+        # Guaranteed starters - one of each resource, placed FAR from HQ and spread
+        # in different directions, so the network must lay long tracks from the
+        # start (the near-base area stays barren). Still discovered at spawn so the
+        # economy can bootstrap (iron+copper for tech, coal for fuel, stone for rail).
+        starters = [
+            ("iron_ore", (32, 18)),
+            ("copper_ore", (-30, 20)),
+            ("coal", (20, -32)),
+            ("stone", (-24, -28)),
+        ]
+        for ore, (cx, cy) in starters:
             base = balance.PATCH_RESERVE[ore]
             self.patches.append(OrePatch(pid, ore, cx, cy, 3, base, base))
             placed.append((cx, cy, 3))
             pid += 1
+        self._starter_count = len(starters)
         attempts = 0
         while len(self.patches) < balance.PATCH_COUNT and attempts < balance.PATCH_COUNT * 40:
             attempts += 1

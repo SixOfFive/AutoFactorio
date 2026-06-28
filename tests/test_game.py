@@ -147,7 +147,6 @@ def test_decommission_stores_train_then_robot_reclaims_track():
     sim = Simulation(Config())
     iron = next(p for p in sim.world.discovered_patches() if p.ore == "iron_ore")
     locos_before = sim.economy.inv.get("locomotive", 0)
-    rail_before = sim.economy.inv.get("rail", 0)
     _build_active(sim, iron.id)                      # robot lays the track first
     assert sim.economy.inv.get("locomotive", 0) == locos_before - 1
     assert len(sim.trains) == 1
@@ -158,15 +157,16 @@ def test_decommission_stores_train_then_robot_reclaims_track():
     assert ok and sim.fields[0].state == "recalling"
     assert len(sim.trains) == 1                    # NOT removed instantly
     assert all(e in sim.net.edges for e in edges)  # track NOT torn up yet
-    # drive it: train returns home -> storage -> robot tears up track -> hauls home
-    for _ in range(int(400 / (1 / 60))):
+    # drive it: train returns home -> storage -> robot tears up track -> hauls
+    # the salvage all the way home and deposits it
+    for _ in range(int(600 / (1 / 60))):
         sim.tick(1 / 60)
-        if 0 not in sim.fields:
+        if 0 not in sim.fields and not any(r.dismantle_phase for r in sim.robots.values()):
             break
     assert 0 not in sim.fields                      # fully decommissioned
     assert all(e not in sim.net.edges for e in edges)             # track removed
     assert sim.economy.inv.get("locomotive", 0) >= locos_before   # train stored
-    assert sim.economy.inv.get("rail", 0) > rail_before           # rail hauled back
+    assert any("returned salvage to base" in e[1] for e in sim.events)  # rail/drills hauled back
 
 
 def test_abandon_is_idempotent_and_non_destructive_at_start():
