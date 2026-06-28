@@ -11,6 +11,9 @@ Controls:
   N                  force a director decision now
   F5 / F9            quicksave / quickload
   Esc                quit
+  (top-right button) New game — reset timer/map/resources (click twice to confirm)
+
+The game autosaves on exit and auto-resumes on the next launch.
 """
 
 from __future__ import annotations
@@ -32,8 +35,11 @@ from .minimap import Minimap
 HINT = ("wheel: zoom   right-drag/WASD: pan   click minimap: jump   F: follow scout   "
         "Space: pause   +/-: speed   I: details   L: comms   M: map   F5/F9: save/load   Esc: quit")
 
-SAVE_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
-    os.path.abspath(__file__)))), "saves", "quicksave.json")
+_SAVE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__)))), "saves")
+SAVE_PATH = os.path.join(_SAVE_DIR, "quicksave.json")
+# Written automatically on quit and loaded automatically on startup (resume).
+AUTOSAVE_PATH = os.path.join(_SAVE_DIR, "autosave.json")
 
 
 class App:
@@ -67,6 +73,7 @@ class App:
         self.show_minimap = True
         self.running = True
         self.speed_idx = balance.GAME_SPEEDS.index(balance.DEFAULT_GAME_SPEED)
+        self._new_game_armed_until = 0   # ms; New-game button needs a confirm click
 
     # ---- loop -------------------------------------------------------------
     def run(self) -> None:
@@ -81,7 +88,37 @@ class App:
                 self._draw()
                 pygame.display.flip()
         finally:
+            self._autosave()
             pygame.quit()
+
+    def _autosave(self) -> None:
+        """Persist the game on shutdown so the next launch resumes it."""
+        try:
+            os.makedirs(_SAVE_DIR, exist_ok=True)
+            self.sim.save(AUTOSAVE_PATH)
+        except Exception:
+            pass            # never let a failed autosave stop a clean exit
+
+    def _new_game(self) -> None:
+        """Reset the timer, world and resources back to the very start."""
+        self.sim = Simulation(self.config)
+        self.director = Director(self.sim, self.config)
+        self.selected = None
+        self.follow_scout = False
+        self.follow_selected = False
+        self.speed_idx = balance.GAME_SPEEDS.index(balance.DEFAULT_GAME_SPEED)
+        self.sim.speed = balance.GAME_SPEEDS[self.speed_idx]
+        self.cam.center_on(0, 0)
+        self.sim.log("New game: timer, map and resources reset to the start.")
+
+    def _click_new_game(self) -> None:
+        now = pygame.time.get_ticks()
+        if now < self._new_game_armed_until:        # second click within window
+            self._new_game_armed_until = 0
+            self._new_game()
+        else:
+            self._new_game_armed_until = now + 3000
+            self.sim.log("New game armed — click the button again within 3s to confirm.")
 
     # ---- input ------------------------------------------------------------
     def _events(self) -> None:
@@ -95,7 +132,10 @@ class App:
                 mx, my = pygame.mouse.get_pos()
                 self.cam.zoom_at(mx, my, 1.12 ** e.y)
             elif e.type == pygame.MOUSEBUTTONDOWN and e.button == 1:
-                if self.show_minimap and self.minimap.handle_click(e.pos, self.screen, self.cam, self.sim):
+                btn = self.hud.button_rects.get("new_game")
+                if btn is not None and btn.collidepoint(e.pos):
+                    self._click_new_game()
+                elif self.show_minimap and self.minimap.handle_click(e.pos, self.screen, self.cam, self.sim):
                     self.follow_scout = False
                     self.follow_selected = False
                 else:
@@ -217,7 +257,8 @@ class App:
     # ---- draw -------------------------------------------------------------
     def _draw(self) -> None:
         self.renderer.draw(self.screen, self.cam, self.sim, self.selected)
-        self.hud.draw(self.screen, self.sim, self.director, self.show_detail)
+        armed = pygame.time.get_ticks() < self._new_game_armed_until
+        self.hud.draw(self.screen, self.sim, self.director, self.show_detail, new_game_armed=armed)
         if self.show_minimap:
             self.minimap.draw(self.screen, self.cam, self.sim)
         self._draw_selection_readout()

@@ -735,3 +735,59 @@ def test_storage_step_below_start_so_growth_is_gradual():
     for item, start in balance.STORAGE_CAP_START.items():
         step = balance.STORAGE_CAP_STEP.get(item, 0)
         assert 0 < step < start, f"{item} step {step} not < start {start}"
+
+
+# ---- timer / autosave-autoload / new game ---------------------------------
+def test_choose_startup_load_precedence():
+    from run import choose_startup_load
+    present = {"/save.json", "/auto.json"}
+    exists = lambda p: p in present
+    # explicit --load wins
+    assert choose_startup_load("/save.json", False, None, "/auto.json", exists) == "/save.json"
+    # a missing explicit load falls through to the autosave
+    assert choose_startup_load("/missing.json", False, None, "/auto.json", exists) == "/auto.json"
+    # --new ignores the autosave
+    assert choose_startup_load(None, True, None, "/auto.json", exists) is None
+    # a fixed --seed starts fresh
+    assert choose_startup_load(None, False, 42, "/auto.json", exists) is None
+    # default: resume the autosave when present
+    assert choose_startup_load(None, False, None, "/auto.json", exists) == "/auto.json"
+    # ...but a fresh game when there is none
+    assert choose_startup_load(None, False, None, "/nope.json", exists) is None
+
+
+def test_new_game_resets_timer_and_resources():
+    from autofactorio.ui.app import App
+    cfg = Config()
+    cfg.llm.enabled = False
+    cfg.display.width, cfg.display.height = 800, 600
+    app = App(cfg)
+    for _ in range(int(20 / (1 / 60))):       # let the timer and economy advance
+        app.sim.tick(1 / 60)
+    assert app.sim.time > 0
+    fresh_iron = Simulation(Config()).economy.inv.get("iron_plate", 0)
+    app.sim.economy.inv["iron_plate"] = 999999
+    old_sim = app.sim
+    app._new_game()
+    assert app.sim is not old_sim             # a brand-new simulation
+    assert app.sim.time == 0.0                # timer reset
+    assert len(app.sim.fields) == 0           # back to the starting layout
+    assert app.sim.economy.inv.get("iron_plate", 0) == fresh_iron   # resources reset
+
+
+def test_autosave_path_roundtrip_resumes_timer():
+    import tempfile, os
+    from autofactorio.engine.simulation import Simulation as Sim
+    sim = Sim(Config())
+    for _ in range(int(15 / (1 / 60))):
+        sim.tick(1 / 60)
+    elapsed = sim.time
+    assert elapsed > 0
+    path = os.path.join(tempfile.gettempdir(), "af_autosave_test.json")
+    ok, _ = sim.save(path)
+    assert ok
+    resumed = Sim(Config())
+    assert resumed.time == 0.0
+    ok, _ = resumed.load(path)
+    assert ok
+    assert abs(resumed.time - elapsed) < 1e-6   # the running timer carries over

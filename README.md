@@ -40,7 +40,10 @@ Real Factorio prevents collisions with **rail signals** and **chain signals** th
 | **L** | Toggle the LLM communications console |
 | **F5 / F9** | Quicksave / quickload (`saves/quicksave.json`) |
 | **N** | Force a director decision now |
+| **New game** button (top-right) | Reset the timer, map & resources to the start (click twice to confirm) |
 | **Esc** | Quit |
+
+The HUD shows a **running-time timer** (`Time H:MM:SS`, in-game time) that persists across save/load and resets when you start a new game.
 
 ## Running it
 
@@ -53,11 +56,14 @@ py -3.14 -m venv .venv
 .venv\Scripts\python run.py
 ```
 
+The game **autosaves on exit** (`saves/autosave.json`) and **auto-resumes** it on the next launch, so you can close and pick up where you left off. Start a fresh game with the in-game **New game** button or the `--new` flag.
+
 Useful flags:
+- `--new` — start fresh, ignoring the autosave
 - `--fallback` — run the heuristic director, never call the LLM
-- `--seed N` — fixed world seed
+- `--seed N` — fixed world seed (also starts fresh)
 - `--config path.json` — use a specific config file
-- `--load saves/quicksave.json` — resume a saved game
+- `--load saves/quicksave.json` — resume a specific save
 
 ## The LLM director
 

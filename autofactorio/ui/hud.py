@@ -39,7 +39,10 @@ INFO = {
     "locomotive": ("Locomotive", "Pulls a train and burns coal. One per mining-field loop."),
     "cargo_wagon": ("Cargo wagon", "Hauls ore from a field to the base (2 per train by default). "
                                    "Research increases its capacity."),
-    "time": ("Elapsed time", "How long this game has been running."),
+    "time": ("Elapsed time", "How long this game has been running (in-game time). "
+                             "Persists across save/load; the New game button resets it."),
+    "new_game": ("New game", "Reset the timer, map and resources back to the very start. "
+                             "Click once to arm, then click again within 3s to confirm."),
     "fields": ("Mining fields", "Active fields mining ore. Robots build new ones and tear down "
                                 "exhausted ones."),
     "trains": ("Trains", "Locomotives hauling ore from fields to the base on one-way loops."),
@@ -67,14 +70,22 @@ def _fmt(n: int) -> str:
     return str(int(n))
 
 
+def _fmt_time(secs: float) -> str:
+    s = int(secs)
+    h, r = divmod(s, 3600)
+    m, ss = divmod(r, 60)
+    return f"{h}:{m:02d}:{ss:02d}" if h else f"{m:02d}:{ss:02d}"
+
+
 class Hud:
     def __init__(self, font: pygame.font.Font, small: pygame.font.Font, big: pygame.font.Font):
         self.font = font
         self.small = small
         self.big = big
         self._zones: list[tuple[pygame.Rect, str]] = []   # (rect, info-key)
+        self.button_rects: dict[str, pygame.Rect] = {}    # clickable HUD buttons
 
-    def draw(self, screen, sim, director, detailed: bool) -> None:
+    def draw(self, screen, sim, director, detailed: bool, new_game_armed: bool = False) -> None:
         w = screen.get_width()
         self._zones = []
         bar = pygame.Surface((w, 64), pygame.SRCALPHA)
@@ -96,11 +107,10 @@ class Hud:
 
         # row 2: stats (each segment is its own hover zone)
         s = sim.stats()
-        mm, ss = divmod(int(sim.time), 60)
         nxt = sim.research.next_tech()
         tech = f"Tech L{s['tech_level']}" + (f"→{nxt['name']}" if nxt else " (max)")
         segs = [
-            (f"⏱ {mm:02d}:{ss:02d}", "time"),
+            (f"Time {_fmt_time(sim.time)}", "time"),
             (f"Fields {s['fields']}", "fields"),
             (f"Trains {s['trains']}", "trains"),
             (f"Rail {_fmt(s['rail_tiles'])}t", "rail_stat"),
@@ -116,10 +126,26 @@ class Hud:
             self._zones.append((pygame.Rect(x, 32, surf.get_width(), 18), key))
             x += surf.get_width() + 16
 
-        # right side: speed + director
+        # right side, row 1: New game button, then speed to its left
+        self.button_rects = {}
+        label = "Confirm reset?" if new_game_armed else "New game"
+        pad = 10
+        bw = self.small.size(label)[0] + pad * 2
+        bh = 22
+        bx = w - bw - 12
+        by = 6
+        fill = WARN if new_game_armed else (52, 58, 70)
+        pygame.draw.rect(screen, fill, (bx, by, bw, bh), border_radius=4)
+        pygame.draw.rect(screen, (120, 128, 140), (bx, by, bw, bh), 1, border_radius=4)
+        lab = self.small.render(label, True, (20, 16, 10) if new_game_armed else TEXT)
+        screen.blit(lab, (bx + pad, by + (bh - lab.get_height()) // 2))
+        btn = pygame.Rect(bx, by, bw, bh)
+        self.button_rects["new_game"] = btn
+        self._zones.append((btn, "new_game"))
+
         spd = "PAUSED" if sim.paused else f"{sim.speed:g}x"
         spd_s = self.font.render(spd, True, WARN if sim.paused else TEXT)
-        sx = w - spd_s.get_width() - 14
+        sx = bx - spd_s.get_width() - 16
         screen.blit(spd_s, (sx, 8))
         self._zones.append((pygame.Rect(sx, 6, spd_s.get_width(), 22), "speed"))
 
