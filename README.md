@@ -61,11 +61,21 @@ Useful flags:
 
 ## The LLM director
 
-The director talks to an **OpenAI-compatible** endpoint (your LAN's *Golden Eye* gateway). Defaults live in `autofactorio/config.py` and can be overridden in `config.json` (copy `config.example.json`):
+The director talks to an **OpenAI-compatible** endpoint (your LAN's *Golden Eye* gateway). To point it at a different server or model, set the **location (`url`)** and **`model`** in either of two places:
+
+**`config.json`** — copy `config.example.json` to `config.json` (gitignored) and edit:
 
 ```json
 { "llm": { "url": "http://192.168.15.3:21345", "model": "qwen3:4b", "enabled": true } }
 ```
+
+**Environment variables** (handy for a one-off, and they win over `config.json`):
+
+```sh
+AUTOFACTORIO_LLM_URL=http://10.0.0.5:11434  AUTOFACTORIO_MODEL=llama3.1:8b  .venv\Scripts\python run.py
+```
+
+Built-in defaults live in `autofactorio/config.py`. To run fully offline with no endpoint at all, use `--fallback` (or set `"enabled": false`).
 
 Each decision turn the game sends a compact JSON report (inventory, stations, idle trains, newly-discovered patches) and the model replies with a validated list of build actions. Thinking is disabled and replies are forced to JSON, matching the SimCity_LLM game-AI setup. The call runs on a worker thread so the game never stalls while the model thinks; if the gateway is unreachable it logs the error and falls back to the heuristic director for that turn. Run with `--fallback` for instant, fully-offline decisions.
 
