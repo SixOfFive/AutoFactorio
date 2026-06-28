@@ -67,6 +67,14 @@ class Renderer:
             f = sim.fields.get(sid)
             if f:
                 pos = (f.patch.cx, f.patch.cy)
+        elif kind == "patch":
+            p = sim.world.patch_by_id(sid)
+            if p:
+                pos = (p.cx, p.cy)
+                rr = max(8, int((p.radius + 1.5) * cam.zoom))
+                sx, sy = cam.world_to_screen(*pos)
+                pygame.draw.circle(screen, (250, 240, 120), (int(sx), int(sy)), rr, 2)
+                return
         if pos is None:
             return
         sx, sy = cam.world_to_screen(*pos)

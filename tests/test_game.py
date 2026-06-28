@@ -69,6 +69,20 @@ def test_hud_tooltips_cover_bar_and_render():
         hud.draw_tooltip(screen)          # must not raise
 
 
+def test_click_selects_unclaimed_patch():
+    from autofactorio.ui.app import App
+    cfg = Config()
+    cfg.llm.enabled = False
+    cfg.display.width, cfg.display.height = 800, 600
+    app = App(cfg)
+    p = next(pp for pp in app.sim.world.discovered_patches() if not pp.claimed)
+    app.cam.center_on(p.cx, p.cy)
+    app.cam.zoom = 20.0
+    app._pick((400, 300))                 # screen center maps to the patch
+    assert app.selected == ("patch", p.id)
+    app._draw()                           # readout + highlight must render cleanly
+
+
 # ---- world / bootstrap ----------------------------------------------------
 def test_starter_patches_discovered():
     sim = Simulation(Config())

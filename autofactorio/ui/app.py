@@ -141,7 +141,9 @@ class App:
             self.sim.speed = balance.GAME_SPEEDS[self.speed_idx]
 
     def _pick(self, pos) -> None:
-        """Select the nearest train (then field) to a world click; deselect on miss."""
+        """Select the nearest train (then field, then ore patch) to a world click;
+        deselect on a miss. Discovered patches can be inspected whether or not
+        they're claimed."""
         wx, wy = self.cam.screen_to_world(*pos)
         best = None
         best_d = 4.0 ** 2                     # within ~4 tiles of a loco
@@ -164,6 +166,19 @@ class App:
                 self.follow_selected = False
                 self.cam.center_on(f.patch.cx, f.patch.cy)
                 return
+        # unclaimed (or any discovered) ore patch
+        patch = None
+        pbest = None
+        for p in self.sim.world.patches:
+            if not p.discovered:
+                continue
+            d = (p.cx - wx) ** 2 + (p.cy - wy) ** 2
+            if d <= (p.radius + 2) ** 2 and (pbest is None or d < pbest):
+                pbest, patch = d, p
+        if patch is not None:
+            self.selected = ("patch", patch.id)
+            self.follow_selected = False
+            return
         self.selected = None
         self.follow_selected = False
 
@@ -226,6 +241,15 @@ class App:
             if f:
                 text = (f"Field #{sid}  {f.patch.ore}  drills {f.drills}  "
                         f"buffer {f.buffer}  reserve {int(f.patch.reserve)}")
+        elif kind == "patch":
+            p = self.sim.world.patch_by_id(sid)
+            if p:
+                import math
+                status = "depleted" if p.depleted else ("claimed" if p.claimed else "unclaimed")
+                pct = int(100 * p.reserve / p.max_reserve) if p.max_reserve else 0
+                text = (f"{p.ore.replace('_', ' ').title()} patch #{sid} [{status}]  "
+                        f"reserve {int(p.reserve)}/{p.max_reserve} ({pct}%)  "
+                        f"{int(math.hypot(p.cx, p.cy))} tiles from base")
         if not text:
             self.selected = None
             return
