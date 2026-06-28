@@ -104,6 +104,30 @@ def test_starter_patches_discovered():
     assert "iron_ore" in ores and "coal" in ores
 
 
+def test_moving_train_reveals_fog():
+    """A running train clears fog around each of its cars (rails are sightlines)."""
+    import numpy as np
+
+    sim = Simulation(Config())
+    iron = next(p for p in sim.world.discovered_patches() if p.ore == "iron_ore")
+    _build_active(sim, iron.id)                       # robot lays track, train dispatched
+    # advance until the train is actually moving along the corridor
+    for _ in range(int(30 / (1 / 60))):
+        sim.tick(1 / 60)
+        t = next(iter(sim.trains.values()))
+        if t.state == "moving" and t.car_poses():
+            break
+    t = next(iter(sim.trains.values()))
+    assert t.state == "moving" and t.car_poses()
+    # black out the whole map, then tick once: only the train (and far-off scout)
+    # can re-light tiles, so any cleared tile under a car proves the train did it.
+    sim.world.explored[:] = 0
+    cars = t.car_poses()
+    sim.tick(1 / 60)
+    assert any(sim.world.is_explored(int(round(x)), int(round(y)))
+               for (x, y, _a, _k) in cars), "train did not clear fog around its cars"
+
+
 # ---- core economic loop ---------------------------------------------------
 def test_loop_delivers_smelts_crafts():
     sim = Simulation(Config())

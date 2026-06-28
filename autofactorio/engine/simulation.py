@@ -105,6 +105,7 @@ class Simulation:
             t.update_movement(dt, self.net, obstacles)
             if t.state == "waiting":
                 self._service_station(t, dt)
+        self._reveal_along_trains()
         self._crush_animals()
         self._update_decommission()
 
@@ -152,6 +153,19 @@ class Simulation:
                         t.hp = max(0.0, t.hp - balance.TRAIN_CRUSH_DAMAGE)
                         self.log(f"Train #{t.id} crushed wildlife (-{int(balance.TRAIN_CRUSH_DAMAGE)} hp).")
                         break
+
+    def _reveal_along_trains(self) -> None:
+        """Running trains chart their route: each car clears fog around it, so the
+        rail corridors out to the fields stay lit and a train can stumble onto a
+        new patch the scout hasn't reached yet."""
+        radius = balance.TRAIN_REVEAL_RADIUS
+        for t in self.trains.values():
+            if t.state != "moving":
+                continue
+            for (x, y, _ang, _kind) in t.car_poses():
+                for patch in self.world.reveal(x, y, radius):
+                    self.log(f"Train #{t.id} sighted a {patch.ore.replace('_', ' ')} "
+                             f"patch (#{patch.id}) at ({patch.cx}, {patch.cy}).")
 
     # ---- station servicing ------------------------------------------------
     def _service_station(self, train: Train, dt: float) -> None:

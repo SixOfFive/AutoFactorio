@@ -158,6 +158,8 @@ STOCK_TARGETS = {
 MAP_RADIUS = 160                   # half-size of the square map in tiles
 SCOUT_REVEAL_RADIUS = 9            # tiles revealed around the explorer robot
 SCOUT_SPEED = 6.0                  # tiles/sec (explorer robot)
+TRAIN_REVEAL_RADIUS = 7            # tiles each moving train clears around its cars
+                                   # (rails become sightlines: trains chart their route)
 PATCH_COUNT = 60                   # ore patches scattered across the map
 PATCH_MIN_RING = 30                # barren ring around HQ; nearest patches start here
 PATCH_RADIUS = (2, 4)             # patch footprint radius range (tiles)
