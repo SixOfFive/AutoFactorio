@@ -244,11 +244,13 @@ class App:
         for k in order:
             v = eco.inv.get(k, 0)
             if v:
-                # the auto-crafter caps buildables at their stock target; show
-                # actual/max for those. Raw ores/plates/intermediates are uncapped
-                # (they just accumulate), so they show the bare amount.
-                cap = balance.STOCK_TARGETS.get(k)
-                val = f"{v}/{cap}" if cap else f"{v}"
+                # storage is finite and per-resource: show actual/cap for capped
+                # items (flag the full ones); uncapped intermediates show bare.
+                cap = eco.cap_of(k)
+                if cap is not None:
+                    val = f"{v}/{cap}" + ("  FULL" if v >= cap else "")
+                else:
+                    val = f"{v}"
                 lines.append((f"  {balance.DISPLAY_NAME.get(k, k):16s}{val}", False))
         lines.append(("", False))
         lines.append((f"Produced: {eco.total_smelted} smelted, {eco.total_crafted} crafted", False))
@@ -261,7 +263,12 @@ class App:
         pygame.draw.rect(self.screen, (70, 76, 86), (8, 72, 300, ph), 1)
         y = 80
         for text, head in lines:
-            col = (120, 190, 240) if head else (228, 232, 238)
+            if head:
+                col = (120, 190, 240)
+            elif text.endswith("FULL"):
+                col = (235, 170, 90)              # storage at capacity
+            else:
+                col = (228, 232, 238)
             self.screen.blit(self.hint_font.render(text, True, col), (16, y))
             y += 16
 

@@ -163,6 +163,52 @@ STOCK_TARGETS = {
 }
 
 # ---------------------------------------------------------------------------
+# Storage (per-resource, NOT global)
+# ---------------------------------------------------------------------------
+# Every resource has its OWN finite storage at the base - coal storage is separate
+# from iron storage, plates, rails, etc. Caps start TIGHT (the base fills fast and
+# overflow can't be held) and grow only by BUILDING more storage, which is
+# deliberately expensive, so capacity is a real per-resource constraint and a
+# steel sink. An item absent from STORAGE_CAP_START is uncapped (the transient
+# crafting intermediates: sticks, cable, gears, circuits, engines).
+STORAGE_CAP_START = {
+    # raw ore: must hold at least a wagon-load (2000) to unload; still tight so the
+    # base backs up within the first few minutes once mining ramps
+    "iron_ore": 2500, "copper_ore": 2500, "coal": 2500, "stone": 2500,
+    # smelted plates
+    "iron_plate": 600, "copper_plate": 500, "steel_plate": 300, "stone_brick": 300,
+    # research currency
+    "science_pack": 120,
+    # buildables
+    "rail": 400, "rail_signal": 60, "chain_signal": 30, "train_stop": 30,
+    "burner_drill": 30, "electric_drill": 30, "stone_furnace": 30, "assembler": 20,
+    "locomotive": 20, "cargo_wagon": 30, "robot": 10,
+}
+# Capacity ONE storage build adds to a single resource (its own location). Each
+# step is well under that resource's starting cap so capacity grows gradually
+# (one build is a fraction more room, never a doubling).
+STORAGE_CAP_STEP = {
+    "iron_ore": 2000, "copper_ore": 2000, "coal": 2000, "stone": 2000,
+    "iron_plate": 400, "copper_plate": 300, "steel_plate": 200, "stone_brick": 200,
+    "science_pack": 60,
+    "rail": 200, "rail_signal": 30, "chain_signal": 15, "train_stop": 15,
+    "burner_drill": 15, "electric_drill": 15, "stone_furnace": 15, "assembler": 10,
+    "locomotive": 10, "cargo_wagon": 15, "robot": 5,
+}
+# Materials one storage build costs (for any single resource). Mostly stone (the
+# silo material - abundant but a real sink) plus some iron plate; deliberately NOT
+# steel, which is the perpetual bottleneck and would make storage unaffordable.
+# Steep enough that capacity grows slowly even when something is backing up.
+STORAGE_COST = {"stone": 120, "iron_plate": 30}
+# A resource at/above this fraction of its cap is "backing up" -> build storage.
+STORAGE_RELIEF_FRACTION = 0.9
+# The heuristic won't grow any single resource's storage past this multiple of its
+# starting cap - a permanently-surplus resource (e.g. coal mined faster than burned)
+# is left to overflow rather than getting an ever-growing silo. Keeps growth slow
+# and bounded; the LLM director may still choose otherwise.
+STORAGE_MAX_MULT = 5.0
+
+# ---------------------------------------------------------------------------
 # World generation
 # ---------------------------------------------------------------------------
 MAP_RADIUS = 160                   # half-size of the square map in tiles

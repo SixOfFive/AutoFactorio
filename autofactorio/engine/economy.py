@@ -40,6 +40,12 @@ class Economy:
         self.inv: dict[str, int] = defaultdict(int)
         for k, v in balance.STARTING_INVENTORY.items():
             self.inv[k] += v
+        # per-resource storage caps; items not listed are uncapped (transient
+        # crafting intermediates). Clamp any starting overflow to the cap.
+        self.caps: dict[str, int] = dict(balance.STORAGE_CAP_START)
+        for k, c in self.caps.items():
+            if self.inv.get(k, 0) > c:
+                self.inv[k] = c
         self.furnaces = balance.HOME_START["furnaces"]
         self.furnace_tier = "stone"
         self.assemblers = balance.HOME_START["assemblers"]
@@ -60,8 +66,34 @@ class Economy:
             self.inv[k] -= v
         return True
 
-    def add(self, item: str, qty: int) -> None:
-        self.inv[item] += qty
+    def add(self, item: str, qty: int) -> int:
+        """Store up to `qty` of `item`, clamped to its storage cap. Returns the
+        amount actually stored (the rest has nowhere to go - the caller decides
+        whether that means overflow lost or back-pressure)."""
+        if qty <= 0:
+            return 0
+        cap = self.caps.get(item)
+        if cap is None:
+            self.inv[item] += qty
+            return qty
+        cur = self.inv.get(item, 0)
+        take = max(0, min(qty, cap - cur))
+        if take:
+            self.inv[item] = cur + take
+        return take
+
+    def cap_of(self, item: str) -> int | None:
+        return self.caps.get(item)
+
+    def fill_fraction(self, item: str) -> float:
+        cap = self.caps.get(item)
+        if not cap:
+            return 0.0
+        return self.inv.get(item, 0) / cap
+
+    def is_full(self, item: str) -> bool:
+        cap = self.caps.get(item)
+        return cap is not None and self.inv.get(item, 0) >= cap
 
     def take_coal(self, n: int) -> int:
         n = min(n, self.inv.get("coal", 0))
@@ -81,7 +113,11 @@ class Economy:
     def _smelt(self) -> None:
         for name in _SMELT_ORDER:
             rec = balance.SMELT_RECIPES[name]
+            out_item = next(iter(rec["out"]))
+            cap = self.caps.get(out_item)
             while self._smelt_bank >= rec["time"] and self.have(rec["in"]):
+                if cap is not None and self.inv.get(out_item, 0) >= cap:
+                    break                              # storage for this plate is full
                 if name == "steel_plate" and self.inv.get("iron_plate", 0) <= _IRON_RESERVE_FOR_STEEL:
                     break
                 for ing, q in rec["in"].items():
@@ -101,7 +137,12 @@ class Economy:
             guard += 1
             progress = False
             for item in _BUILD_ORDER:
-                if self.inv.get(item, 0) >= balance.STOCK_TARGETS.get(item, 0):
+                # craft toward the stock target, but never past available storage
+                target = balance.STOCK_TARGETS.get(item, 0)
+                cap = self.caps.get(item)
+                if cap is not None:
+                    target = min(target, cap)
+                if self.inv.get(item, 0) >= target:
                     continue
                 if self._try_craft(item, depth=0):
                     progress = True

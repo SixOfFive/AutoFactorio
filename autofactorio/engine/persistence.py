@@ -16,6 +16,7 @@ import zlib
 
 import numpy as np
 
+from .. import balance
 from .rail import RailEdge, Block, Signal, Station
 from .mining import MiningField
 from .trains import Train, Leg
@@ -72,6 +73,7 @@ def save_game(sim, path: str) -> None:
             "assemblers": sim.economy.assemblers,
             "total_smelted": sim.economy.total_smelted,
             "total_crafted": sim.economy.total_crafted,
+            "caps": dict(sim.economy.caps),
         },
         "research": sim.research.to_dict(),
         "net": {
@@ -192,6 +194,13 @@ def load_into(sim, path: str) -> None:
     sim.economy.inv.clear()
     for k, v in e["inv"].items():
         sim.economy.inv[k] = v
+    # storage caps: start from defaults (forward-compat for old saves) then apply
+    sim.economy.caps = dict(balance.STORAGE_CAP_START)
+    sim.economy.caps.update({k: int(v) for k, v in e.get("caps", {}).items()})
+    # enforce the same invariant as Economy.__init__: inventory never exceeds cap
+    for k, c in sim.economy.caps.items():
+        if sim.economy.inv.get(k, 0) > c:
+            sim.economy.inv[k] = c
     sim.economy.furnaces = e["furnaces"]
     sim.economy.furnace_tier = e["furnace_tier"]
     sim.economy.assemblers = e["assemblers"]

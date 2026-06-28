@@ -16,6 +16,7 @@ _SPEC = {
     "build_assembler": {"count": (int, False, 1)},
     "build_furnace":   {"count": (int, False, 1)},
     "expand_drills":   {"field_id": (int, True, None), "count": (int, False, 2)},
+    "build_storage":   {"item": (str, True, None), "count": (int, False, 1)},
     "research":        {},
     "build_robot":     {},
     "wait":            {"reason": (str, False, "")},

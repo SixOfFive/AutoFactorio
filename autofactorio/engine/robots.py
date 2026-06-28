@@ -267,15 +267,29 @@ class Robots:
         elif r.dismantle_phase == "to_home":
             d = r.move_toward(0.0, 0.0, balance.ROBOT_SPEED, dt)
             if d < 2.5:
-                got = {k: int(v) for k, v in r.carry_reclaim.items() if v}
-                for k, v in got.items():
-                    sim.economy.add(k, v)
-                if got:
-                    sim.log(f"Robot #{r.id} returned salvage to base for reuse: {got}.")
-                r.carry_reclaim = {}
-                r.dismantle_phase = None
-                r.target = None
-                r.task = "explore"
+                # deposit only what storage can hold; keep the rest and retry next
+                # tick (back-pressure) so finite storage never silently eats salvage.
+                deposited = {}
+                for k in list(r.carry_reclaim.keys()):
+                    want = int(r.carry_reclaim[k])
+                    if want <= 0:
+                        r.carry_reclaim.pop(k, None)
+                        continue
+                    got = sim.economy.add(k, want)
+                    if got:
+                        deposited[k] = got
+                    rem = want - got
+                    if rem > 0:
+                        r.carry_reclaim[k] = rem
+                    else:
+                        r.carry_reclaim.pop(k, None)
+                if deposited:
+                    sim.log(f"Robot #{r.id} returned salvage to base for reuse: {deposited}.")
+                if not r.carry_reclaim:          # all stored -> done
+                    r.dismantle_phase = None
+                    r.target = None
+                    r.task = "explore"
+                # else: storage full; wait at base and keep depositing as room frees
 
     def _do_fuel(self, sim, r: Robot, dt: float) -> None:
         # slow last-resort coal run: go to the nearest known coal patch, fill up,

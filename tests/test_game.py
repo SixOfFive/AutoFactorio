@@ -582,3 +582,156 @@ def test_junction_chain_signal_turns_red_when_reserved():
         if saw_red:
             break
     assert saw_red, "throat chain signal never showed red while the junction was held"
+
+
+# ---- per-resource storage caps --------------------------------------------
+def test_storage_add_clamps_to_cap_and_uncapped_passes():
+    eco = Simulation(Config()).economy
+    eco.inv["coal"] = eco.caps["coal"] - 5
+    took = eco.add("coal", 100)
+    assert took == 5                                   # only what fits is stored
+    assert eco.inv["coal"] == eco.caps["coal"]
+    assert eco.add("coal", 50) == 0                    # already full
+    # transient intermediates are uncapped
+    assert "iron_gear" not in eco.caps
+    assert eco.add("iron_gear", 1000) == 1000
+
+
+def test_build_storage_is_per_resource_and_costs_materials():
+    sim = Simulation(Config())
+    eco = sim.economy
+    assert eco.have(balance.STORAGE_COST)             # starting stock can afford one
+    coal_before = eco.caps["coal"]
+    iron_before = eco.caps["iron_ore"]
+    cost_item = next(iter(balance.STORAGE_COST))       # whatever storage is priced in
+    spent_before = eco.inv.get(cost_item, 0)
+    ok, _ = sim.build_storage("coal")
+    assert ok
+    assert eco.caps["coal"] == coal_before + balance.STORAGE_CAP_STEP["coal"]
+    assert eco.caps["iron_ore"] == iron_before        # other resources unaffected
+    assert eco.inv[cost_item] == spent_before - balance.STORAGE_COST[cost_item]
+    # unaffordable -> fails cleanly, cap unchanged
+    eco.inv[cost_item] = 0
+    cap_now = eco.caps["coal"]
+    ok, msg = sim.build_storage("coal")
+    assert not ok and eco.caps["coal"] == cap_now
+
+
+def test_full_storage_backpressures_unload():
+    sim = Simulation(Config())
+    iron = next(p for p in sim.world.discovered_patches() if p.ore == "iron_ore")
+    _build_active(sim, iron.id)
+    t = next(iter(sim.trains.values()))
+    t.begin_leg(sim.net, 1)                            # return leg -> home unload stop
+    t.head_s = t.leg_len
+    t.state = "waiting"
+    eco = sim.economy
+    eco.inv["iron_ore"] = eco.caps["iron_ore"]        # storage already full
+    t.cargo = {"iron_ore": 1000}
+    sim._service_station(t, 1 / 60)
+    assert t.cargo.get("iron_ore", 0) == 1000          # nothing could be unloaded
+    assert eco.inv["iron_ore"] == eco.caps["iron_ore"]  # cap not exceeded
+
+
+def test_smelting_halts_when_plate_storage_full():
+    eco = Simulation(Config()).economy
+    eco.inv["iron_plate"] = eco.caps["iron_plate"]    # plate storage full
+    eco.inv["iron_ore"] = 100
+    eco.inv["copper_ore"] = 0
+    eco._smelt_bank = 50.0
+    eco._smelt()
+    assert eco.inv["iron_ore"] == 100                  # iron smelting halted (no room)
+    assert eco.inv["iron_plate"] <= eco.caps["iron_plate"]
+
+
+def test_director_builds_storage_under_backpressure():
+    cfg = Config()
+    cfg.llm.enabled = False
+    sim = Simulation(cfg)
+    director = Director(sim, cfg)
+    start_caps = dict(sim.economy.caps)
+    _run(sim, director, seconds=480)
+    grew = [k for k in start_caps if sim.economy.caps[k] > start_caps[k]]
+    assert grew, "director never expanded any storage despite back-pressure"
+    s = sim.stats()
+    assert s["delivered"] > 500
+    assert s["stalled_trains"] == 0
+    # caps only ever grow in whole STORAGE_CAP_STEP increments of that resource
+    for k in grew:
+        assert (sim.economy.caps[k] - start_caps[k]) % balance.STORAGE_CAP_STEP[k] == 0
+
+
+def test_save_load_preserves_storage_caps():
+    import tempfile, os
+    sim = Simulation(Config())
+    sim.economy.caps["coal"] = 9999
+    sim.economy.caps["iron_plate"] = 1234
+    path = os.path.join(tempfile.gettempdir(), "af_storage_caps.sav")
+    ok, _ = sim.save(path)
+    assert ok
+    sim2 = Simulation(Config())
+    ok, _ = sim2.load(path)
+    assert ok
+    assert sim2.economy.caps["coal"] == 9999
+    assert sim2.economy.caps["iron_plate"] == 1234
+
+
+def test_recalled_train_stores_even_when_storage_full():
+    """Regression: a recalled train whose storage is full must still go into
+    storage (after the idle wait) instead of circling the depleted field forever
+    and blocking decommission."""
+    sim = Simulation(Config())
+    iron = next(p for p in sim.world.discovered_patches() if p.ore == "iron_ore")
+    _build_active(sim, iron.id)
+    t = next(iter(sim.trains.values()))
+    t.recall = True
+    t.begin_leg(sim.net, 1)                            # return leg -> home unload stop
+    t.head_s = t.leg_len
+    t.state = "waiting"
+    sim.economy.inv["iron_ore"] = sim.economy.caps["iron_ore"]   # storage full
+    t.cargo = {"iron_ore": 500}                        # undeliverable cargo aboard
+    tid = t.id
+    for _ in range(int(8 / (1 / 60))):                 # > WAIT_IDLE seconds
+        if tid not in sim.trains:
+            break
+        sim._service_station(t, 1 / 60)
+    assert tid not in sim.trains, "recalled train never stored despite full storage"
+
+
+def test_store_train_never_loses_rolling_stock_at_cap():
+    """Regression: returning a train when loco/wagon storage is full must not
+    vanish the rolling stock (you can always park a train you own)."""
+    sim = Simulation(Config())
+    iron = next(p for p in sim.world.discovered_patches() if p.ore == "iron_ore")
+    _build_active(sim, iron.id)
+    t = next(iter(sim.trains.values()))
+    w = t.wagons
+    eco = sim.economy
+    eco.inv["locomotive"] = eco.caps["locomotive"]    # loco storage already full
+    eco.inv["cargo_wagon"] = eco.caps["cargo_wagon"]
+    loco_before = eco.inv["locomotive"]
+    wagon_before = eco.inv["cargo_wagon"]
+    sim._store_train(t)
+    assert eco.inv["locomotive"] == loco_before + 1   # conserved (over-cap allowed)
+    assert eco.inv["cargo_wagon"] == wagon_before + w
+
+
+def test_load_clamps_inventory_to_caps():
+    import tempfile, os
+    sim = Simulation(Config())
+    sim.economy.inv["coal"] = sim.economy.caps["coal"] + 5000   # over-cap on disk
+    path = os.path.join(tempfile.gettempdir(), "af_overcap.sav")
+    ok, _ = sim.save(path)
+    assert ok
+    sim2 = Simulation(Config())
+    ok, _ = sim2.load(path)
+    assert ok
+    assert sim2.economy.inv["coal"] == sim2.economy.caps["coal"]
+
+
+def test_storage_step_below_start_so_growth_is_gradual():
+    """A single storage build must add less than the resource's starting cap (so
+    capacity grows gradually, never doubling in one build)."""
+    for item, start in balance.STORAGE_CAP_START.items():
+        step = balance.STORAGE_CAP_STEP.get(item, 0)
+        assert 0 < step < start, f"{item} step {step} not < start {start}"

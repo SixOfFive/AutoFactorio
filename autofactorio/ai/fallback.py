@@ -51,14 +51,31 @@ def decide(sim, report) -> dict:
         return {"reasoning": "Deploying a robot (build/repair/defense/exploration).",
                 "actions": [{"action": "build_robot"}]}
 
-    # 2. advance tech whenever the next level is affordable (science accumulates
+    # 2. relieve back-pressure: if a resource's storage is nearly full its trains
+    #    can't fully unload and its smelting/crafting has stalled, so expand that
+    #    resource's storage (the fullest one). This comes BEFORE research/expansion
+    #    because a full silo throttles the whole economy. science_pack is excluded
+    #    (research is its natural drain). Storage is per-resource and steep, so it
+    #    only fires when something is genuinely choking and we can pay for it.
+    if eco.have(balance.STORAGE_COST):
+        choked = [(eco.fill_fraction(k), k) for k in eco.caps
+                  if k != "science_pack"
+                  and eco.fill_fraction(k) >= balance.STORAGE_RELIEF_FRACTION
+                  and eco.caps[k] < balance.STORAGE_CAP_START[k] * balance.STORAGE_MAX_MULT]
+        if choked:
+            _, item = max(choked)
+            return {"reasoning": f"{balance.DISPLAY_NAME.get(item, item)} storage is full; "
+                                 f"expanding it.",
+                    "actions": [{"action": "build_storage", "item": item}]}
+
+    # 3. advance tech whenever the next level is affordable (science accumulates
     #    from surplus, so this fires periodically and compounds the whole economy)
     nxt = sim.research.next_tech()
     if nxt is not None and eco.have(nxt["cost"]):
         return {"reasoning": f"Researching {nxt['name']} ({nxt['desc']}).",
                 "actions": [{"action": "research"}]}
 
-    # 3. expand to the nearest affordable patch, diversifying ore types
+    # 4. expand to the nearest affordable patch, diversifying ore types
     affordable = [p for p in patches if sim.can_build_field(p)]
     if affordable:
         affordable.sort(key=lambda p: (ore_fields.get(p.ore, 0), _dist(p)))
@@ -66,13 +83,13 @@ def decide(sim, report) -> dict:
         return field_action(p, f"Expanding to {p.ore.replace('_', ' ')} patch #{p.id} "
                                f"({int(_dist(p))} tiles out).")
 
-    # 4. relieve a backed-up field with another train
+    # 5. relieve a backed-up field with another train
     for f in sim.fields.values():
         if f.buffer >= f.buffer_cap * 0.85 and eco.have({"locomotive": 1, "cargo_wagon": balance.DEFAULT_WAGONS}):
             return {"reasoning": f"Field #{f.id} buffer backing up; adding a train.",
                     "actions": [{"action": "add_train", "field_id": f.id}]}
 
-    # 5. scale home production with spare stock
+    # 6. scale home production with spare stock
     if eco.inv.get("assembler", 0) >= 2 and eco.assemblers < 16:
         return {"reasoning": "Scaling crafting: deploying an assembler.",
                 "actions": [{"action": "build_assembler", "count": 1}]}

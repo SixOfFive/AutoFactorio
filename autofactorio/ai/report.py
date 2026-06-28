@@ -44,8 +44,21 @@ def build_report(sim) -> dict:
             "affordable": sim.can_build_field(p),
         })
 
+    # per-resource storage: list anything getting full so the director can expand
+    # it (storage is per-resource and finite; full storage stalls the economy).
+    storage = {}
+    backing_up = []
+    for k in eco.caps:
+        frac = eco.fill_fraction(k)
+        if frac >= 0.6:
+            storage[k] = f"{int(eco.inv.get(k, 0))}/{eco.caps[k]}"
+        if frac >= balance.STORAGE_RELIEF_FRACTION:
+            backing_up.append(k)
+
     s = sim.stats()
     flags = []
+    if backing_up:
+        flags.append("STORAGE_FULL")           # see storage_full[] for which items
     if any(f.patch.depleted for f in sim.fields.values()):
         flags.append("DEPLETED_FIELDS")
     if s["damaged_trains"]:
@@ -73,6 +86,8 @@ def build_report(sim) -> dict:
     return {
         "time_s": int(sim.time),
         "inventory": inv,
+        "storage": storage,
+        "storage_full": backing_up,            # resource names whose storage is full
         "research": research,
         "production": {
             "furnaces": eco.furnaces,

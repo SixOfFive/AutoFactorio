@@ -43,6 +43,14 @@ Valid actions (use the exact "action" names and integer ids from the report):
 - {"action":"build_furnace","count":N}        deploy furnaces from stock to smelt faster.
 - {"action":"build_assembler","count":N}      deploy assemblers from stock to craft faster.
 - {"action":"expand_drills","field_id":N,"count":N}  add drills to a field.
+- {"action":"build_storage","item":"<name>"}  expand storage for ONE resource (e.g.
+                                              "coal","iron_ore","iron_plate"). Storage is
+                                              finite and PER-RESOURCE; when a resource is
+                                              full its trains can't unload and smelting/
+                                              crafting stall. Costs stone + iron plate. The
+                                              report lists full resources in "storage_full"
+                                              (and "storage" shows amount/cap) - pass one of
+                                              those exact names as "item".
 - {"action":"research"}                        research the next tech level (report shows
                                               research.next with name/desc/affordable).
                                               Techs permanently boost drills, trains, smelting, etc.
@@ -53,8 +61,10 @@ Valid actions (use the exact "action" names and integer ids from the report):
 
 Priorities: abandon ONLY fields with "depleted":true (never scrap a productive field)
 to recover its train; never run out of coal (it fuels trains) - claim a coal patch if
-the NO_COAL_FIELD or LOW_COAL flag is set; secure iron early; expand to affordable
-patches; research the next tech when affordable (it compounds); build a robot when
+the NO_COAL_FIELD or LOW_COAL flag is set; secure iron early; when the STORAGE_FULL flag
+is set, build_storage for each resource named in "storage_full" so the economy keeps
+flowing; expand to affordable patches; research the next tech when affordable (it
+compounds); build a robot when
 the WILDLIFE_PRESSURE or DAMAGED_TRAINS flag is set and robots.can_build is true; and
 scale production. Keep 1-3 actions per turn. Output JSON only."""
 

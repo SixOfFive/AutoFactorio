@@ -225,22 +225,30 @@ class Simulation:
                 mv = min(train.cargo[item], budget)
                 if mv <= 0:
                     continue
-                train.cargo[item] -= mv
+                # storage is finite and per-resource: only what fits is taken; the
+                # rest stays aboard (back-pressure until more storage is built).
+                accepted = self.economy.add(item, mv)
+                if accepted <= 0:
+                    continue
+                train.cargo[item] -= accepted
                 if train.cargo[item] == 0:
                     del train.cargo[item]
-                self.economy.add(item, mv)
-                self.delivered_total += mv
-                moved += mv
-                budget -= mv
+                self.delivered_total += accepted
+                moved += accepted
+                budget -= accepted
                 if budget <= 0:
                     break
 
         train.idle_timer = 0.0 if moved > 0 else train.idle_timer + dt
         train.wait_timer += dt
         if self._wait_satisfied(train, leg):
-            # a recalled train that has reached the home (unload) stop empty goes
-            # into storage instead of looping back out
-            if train.recall and st.is_home and train.cargo_total() == 0:
+            # a recalled train that has reached the home (unload) stop goes into
+            # storage instead of looping back out. Normally it must be empty first,
+            # but if its storage is full it can't unload - rather than circle the
+            # depleted field forever (blocking decommission), store it once it has
+            # waited out the idle timer (any undeliverable cargo is discarded).
+            if train.recall and st.is_home and (train.cargo_total() == 0
+                                                or train.idle_timer >= WAIT_IDLE):
                 self._store_train(train)
             else:
                 train.depart(self.net)
@@ -441,11 +449,19 @@ class Simulation:
             blk = self.net.blocks.get(bid)
             if blk is not None and blk.occupant == train.id:
                 blk.occupant = None
-        self.economy.add("locomotive", 1)
-        self.economy.add("cargo_wagon", train.wagons)
+        self._reclaim_stock("locomotive", 1)
+        self._reclaim_stock("cargo_wagon", train.wagons)
         self.trains.pop(train.id, None)
         self.log(f"Train #{train.id} returned home and went into storage "
                  f"(+1 loco, +{train.wagons} wagons).")
+
+    def _reclaim_stock(self, item: str, qty: int) -> None:
+        """Return the player's OWN rolling stock to inventory without losing it:
+        store what fits under the cap, and let the small remainder exceed the cap
+        rather than vanish (you can always park a train you already own)."""
+        stored = self.economy.add(item, qty)
+        if stored < qty:
+            self.economy.inv[item] += (qty - stored)
 
     def _update_decommission(self) -> None:
         """Advance fields through recalling -> dismantling once their trains are
@@ -507,6 +523,25 @@ class Simulation:
         self.economy.furnaces += n
         self.log(f"Deployed {n} furnace(s); home now has {self.economy.furnaces}.")
         return True, f"furnaces now {self.economy.furnaces}"
+
+    def build_storage(self, item: str, n: int = 1) -> tuple[bool, str]:
+        """Expand the storage for ONE resource (its own location - coal storage is
+        independent of iron, etc.). Costs a fixed, steep material price per unit and
+        raises only that resource's cap, so capacity grows slowly and deliberately."""
+        if item not in self.economy.caps:
+            return False, f"{item} has no expandable storage"
+        n = max(1, int(n))
+        cost = {k: v * n for k, v in balance.STORAGE_COST.items()}
+        if not self.economy.have(cost):
+            missing = {k: v for k, v in cost.items() if self.economy.inv.get(k, 0) < v}
+            return False, f"insufficient materials for storage: need {missing}"
+        self.economy.spend(cost)
+        step = balance.STORAGE_CAP_STEP.get(item, 0) * n
+        self.economy.caps[item] += step
+        name = balance.DISPLAY_NAME.get(item, item)
+        self.log(f"Built storage for {name} (+{step} capacity; now "
+                 f"{self.economy.caps[item]}).")
+        return True, f"{item} storage now {self.economy.caps[item]}"
 
     def expand_drills(self, field_id: int, n: int = 2) -> tuple[bool, str]:
         field = self.fields.get(field_id)
