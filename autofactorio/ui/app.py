@@ -159,6 +159,10 @@ class App:
             self.follow_selected = True
             self.follow_scout = False
             return
+        if wx * wx + wy * wy <= 8.0 ** 2:          # the home base (HQ + factory ring)
+            self.selected = ("base", 0)
+            self.follow_selected = False
+            return
         for f in self.sim.fields.values():
             rad = (f.patch.radius + 3) ** 2
             if (f.patch.cx - wx) ** 2 + (f.patch.cy - wy) ** 2 < rad:
@@ -224,10 +228,45 @@ class App:
             self.screen.blit(hint, (10, self.screen.get_height() - 22))
         self.hud.draw_tooltip(self.screen)        # drawn last so it sits on top
 
+    def _draw_base_panel(self) -> None:
+        eco = self.sim.economy
+        lines = [("HOME BASE", True)]
+        lines.append((f"Factories: {eco.furnaces} furnaces, {eco.assemblers} assemblers", False))
+        lines.append((f"Robots: {len(self.sim.robots)}/{self.sim.research.max_robots}"
+                      f"     Research: Tech L{self.sim.research.level}", False))
+        lines.append(("", False))
+        lines.append(("STORAGE", True))
+        order = ["iron_ore", "copper_ore", "stone", "iron_plate", "copper_plate",
+                 "steel_plate", "stone_brick", "coal", "electronic_circuit", "iron_gear",
+                 "science_pack", "rail", "rail_signal", "chain_signal", "train_stop",
+                 "burner_drill", "electric_drill", "stone_furnace", "assembler",
+                 "locomotive", "cargo_wagon", "robot"]
+        for k in order:
+            v = eco.inv.get(k, 0)
+            if v:
+                lines.append((f"  {balance.DISPLAY_NAME.get(k, k):16s}{v}", False))
+        lines.append(("", False))
+        lines.append((f"Produced: {eco.total_smelted} smelted, {eco.total_crafted} crafted", False))
+        lines.append((f"Delivered home: {self.sim.delivered_total}", False))
+
+        ph = len(lines) * 16 + 14
+        panel = pygame.Surface((300, ph), pygame.SRCALPHA)
+        panel.fill((10, 12, 17, 230))
+        self.screen.blit(panel, (8, 72))
+        pygame.draw.rect(self.screen, (70, 76, 86), (8, 72, 300, ph), 1)
+        y = 80
+        for text, head in lines:
+            col = (120, 190, 240) if head else (228, 232, 238)
+            self.screen.blit(self.hint_font.render(text, True, col), (16, y))
+            y += 16
+
     def _draw_selection_readout(self) -> None:
         if not self.selected:
             return
         kind, sid = self.selected
+        if kind == "base":
+            self._draw_base_panel()
+            return
         text = None
         if kind == "train":
             t = self.sim.trains.get(sid)

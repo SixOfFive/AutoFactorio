@@ -69,6 +69,19 @@ def test_hud_tooltips_cover_bar_and_render():
         hud.draw_tooltip(screen)          # must not raise
 
 
+def test_click_selects_base_shows_panel():
+    from autofactorio.ui.app import App
+    cfg = Config()
+    cfg.llm.enabled = False
+    cfg.display.width, cfg.display.height = 800, 600
+    app = App(cfg)
+    app.cam.center_on(0, 0)
+    app.cam.zoom = 20.0
+    app._pick((400, 300))                 # screen center maps to the home base
+    assert app.selected == ("base", 0)
+    app._draw()                           # base panel must render cleanly
+
+
 def test_click_selects_unclaimed_patch():
     from autofactorio.ui.app import App
     cfg = Config()

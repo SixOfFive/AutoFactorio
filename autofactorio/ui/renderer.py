@@ -57,6 +57,11 @@ class Renderer:
             return
         kind, sid = selected
         pos = None
+        if kind == "base":
+            sx, sy = cam.world_to_screen(0, 0)
+            pygame.draw.circle(screen, (250, 240, 120), (int(sx), int(sy)),
+                               max(10, int(7.5 * cam.zoom)), 2)
+            return
         if kind == "train":
             t = sim.trains.get(sid)
             if t:
