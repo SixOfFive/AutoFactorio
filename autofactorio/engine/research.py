@@ -22,6 +22,7 @@ class Research:
         self.wagon_capacity = balance.CARGO_WAGON_CAPACITY
         self.furnace_mult = 1.0
         self.rail_discount = 1.0
+        self.unload_mult = 1.0
         self.max_robots = balance.BASE_MAX_ROBOTS
 
     def next_tech(self) -> dict | None:
@@ -41,6 +42,8 @@ class Research:
                 self.furnace_mult *= v
             elif k == "rail_discount":
                 self.rail_discount *= v
+            elif k == "unload_mult":
+                self.unload_mult *= v
             elif k == "max_robots":
                 self.max_robots = min(3, self.max_robots + int(v))   # capped at 3 for now
         self.completed.append(tech["name"])
@@ -53,7 +56,7 @@ class Research:
             "drill_mult": self.drill_mult, "train_speed": self.train_speed,
             "train_accel": self.train_accel, "wagon_capacity": self.wagon_capacity,
             "furnace_mult": self.furnace_mult, "rail_discount": self.rail_discount,
-            "max_robots": self.max_robots,
+            "unload_mult": self.unload_mult, "max_robots": self.max_robots,
         }
 
     def from_dict(self, d: dict) -> None:
@@ -65,4 +68,5 @@ class Research:
         self.wagon_capacity = d.get("wagon_capacity", balance.CARGO_WAGON_CAPACITY)
         self.furnace_mult = d.get("furnace_mult", 1.0)
         self.rail_discount = d.get("rail_discount", 1.0)
+        self.unload_mult = d.get("unload_mult", 1.0)
         self.max_robots = d.get("max_robots", balance.BASE_MAX_ROBOTS)

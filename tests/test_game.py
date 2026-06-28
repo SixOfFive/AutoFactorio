@@ -343,6 +343,30 @@ def test_train_cars_stay_connected_across_legs():
         assert _m.dist(a[:2], b[:2]) > balance.ENTITY_LEN * 0.5
 
 
+def test_unload_takes_time_and_research_speeds_it():
+    sim = Simulation(Config())
+    iron = next(p for p in sim.world.discovered_patches() if p.ore == "iron_ore")
+    _build_active(sim, iron.id)
+    t = next(iter(sim.trains.values()))
+    t.begin_leg(sim.net, 1)                 # the return leg ends at the home unload stop
+    t.head_s = t.leg_len
+    t.state = "waiting"
+
+    t.cargo = {"iron_ore": 2000}
+    before = sim.economy.inv.get("iron_ore", 0)
+    sim._service_station(t, 1 / 60)
+    base_moved = sim.economy.inv.get("iron_ore", 0) - before
+    assert 0 < base_moved < 2000            # partial unload, not instant
+    assert t.cargo_total() > 0              # still has cargo to unload
+
+    sim.research.unload_mult = 4.0          # research speeds unloading
+    t.cargo = {"iron_ore": 2000}
+    before = sim.economy.inv.get("iron_ore", 0)
+    sim._service_station(t, 1 / 60)
+    fast_moved = sim.economy.inv.get("iron_ore", 0) - before
+    assert fast_moved > base_moved
+
+
 def test_train_waits_for_obstacle_ahead():
     sim = Simulation(Config())
     iron = next(p for p in sim.world.discovered_patches() if p.ore == "iron_ore")

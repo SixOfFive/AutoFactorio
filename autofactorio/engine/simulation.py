@@ -21,8 +21,7 @@ from .robots import Robots
 from .trains import Train, Leg
 from .world import World
 
-LOAD_RATE = 800.0      # items/sec a train (un)loads at a stop
-UNLOAD_RATE = 800.0
+LOAD_RATE = 800.0      # items/sec a train loads at a field stop
 WAIT_IDLE = 6.0        # secs with no transfer before a train gives up waiting
 LOAD_MAX_DWELL = 30.0  # secs a train will sit loading before leaving with a partial load
 HOME = (0, 0)
@@ -169,7 +168,8 @@ class Simulation:
                     train.cargo[field.ore] = train.cargo.get(field.ore, 0) + got
                     moved = got
         elif st.kind == "unload":
-            budget = int(UNLOAD_RATE * dt) + 1
+            rate = balance.BASE_UNLOAD_RATE * self.research.unload_mult
+            budget = max(1, int(rate * dt))
             for item in list(train.cargo.keys()):
                 mv = min(train.cargo[item], budget)
                 if mv <= 0:

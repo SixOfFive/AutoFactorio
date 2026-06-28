@@ -81,6 +81,8 @@ RECLAIM_REFUND = 0.5
 # ---------------------------------------------------------------------------
 CARGO_WAGON_CAPACITY = 2000        # items per wagon (single int, no stacks)
 DEFAULT_WAGONS = 2                 # per train
+BASE_UNLOAD_RATE = 200             # items/sec a train unloads at home (slow to start;
+                                   # research raises it via research.unload_mult)
 TRAIN_MAX_SPEED = 8.0              # tiles/sec
 TRAIN_ACCEL = 4.0                 # tiles/sec^2
 ENTITY_LEN = 4                     # loco / wagon length in tiles (small enough that
@@ -220,17 +222,17 @@ TECHS = [
     {"name": "Train Braking 1", "cost": {"science_pack": 14},
      "effect": {"train_speed": 1.25, "train_accel": 1.3}, "desc": "faster trains"},
     {"name": "Cargo Capacity 1", "cost": {"science_pack": 18},
-     "effect": {"wagon_capacity": 1.5}, "desc": "+50% wagon capacity"},
+     "effect": {"wagon_capacity": 1.5, "unload_mult": 1.6}, "desc": "+50% wagon capacity, faster unload"},
     {"name": "Electric Smelting", "cost": {"science_pack": 24},
      "effect": {"furnace_mult": 1.5}, "desc": "+50% smelting speed"},
     {"name": "Rail Engineering", "cost": {"science_pack": 30},
-     "effect": {"rail_discount": 0.8}, "desc": "-20% rail cost per link"},
+     "effect": {"rail_discount": 0.8, "unload_mult": 1.5}, "desc": "-20% rail cost, faster unload"},
     {"name": "Mining Productivity 2", "cost": {"science_pack": 40},
      "effect": {"drill_mult": 1.5}, "desc": "+50% drill output"},
     {"name": "Mining Productivity 3", "cost": {"science_pack": 50},
      "effect": {"drill_mult": 1.5}, "desc": "+50% drill output"},
     {"name": "Cargo Capacity 2", "cost": {"science_pack": 64},
-     "effect": {"wagon_capacity": 1.5}, "desc": "+50% wagon capacity"},
+     "effect": {"wagon_capacity": 1.5, "unload_mult": 1.6}, "desc": "+50% wagon capacity, faster unload"},
     {"name": "Train Braking 2", "cost": {"science_pack": 80},
      "effect": {"train_speed": 1.25, "train_accel": 1.3}, "desc": "faster trains"},
     {"name": "Electric Smelting 2", "cost": {"science_pack": 100},
