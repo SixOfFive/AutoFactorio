@@ -45,6 +45,7 @@ class Signal:
     node_id: int
     kind: str                                # 'rail' | 'chain'
     pos: tuple[float, float] = (0.0, 0.0)
+    aspect: str = "green"                    # 'green' | 'red' (live, for rendering)
 
 
 @dataclass
@@ -74,6 +75,36 @@ class RailNetwork:
         self._eid = 0
         self._bid = 0
         self._sid = 0
+        # home junction interlock: all loops cross at the origin, so the throat is
+        # a single mutex - at most one train inside at a time (see Simulation).
+        self.junction_center: tuple[float, float] = (0.0, 0.0)
+        self.junction_radius: float = balance.JUNCTION_RADIUS
+        self.junction_occupant: int | None = None
+
+    def in_junction(self, x: float, y: float, slack: float = 0.0) -> bool:
+        cx, cy = self.junction_center
+        r = self.junction_radius + slack
+        return (x - cx) ** 2 + (y - cy) ** 2 <= r * r
+
+    def update_signals(self) -> None:
+        """Refresh each signal's red/green aspect for rendering: a signal shows red
+        when the block just past it is held by a train, and a junction-throat chain
+        signal shows red while the home junction is reserved."""
+        jr = self.junction_radius + balance.LANE_OFFSET + 2.0
+        for nid, sig in self.signals.items():
+            red = False
+            for eid in self.out_edges.get(nid, []):
+                e = self.edges.get(eid)
+                if e is None:
+                    continue
+                blk = self.blocks.get(e.block_id)
+                if blk is not None and blk.occupant is not None:
+                    red = True
+                    break
+            if (sig.kind == "chain" and self.junction_occupant is not None
+                    and (sig.pos[0] ** 2 + sig.pos[1] ** 2) <= jr * jr):
+                red = True
+            sig.aspect = "red" if red else "green"
 
     # ---- primitives -------------------------------------------------------
     def add_node(self, tx: int, ty: int) -> int:

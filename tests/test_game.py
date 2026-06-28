@@ -506,3 +506,79 @@ def test_two_trains_one_lane_never_share_a_block():
                 assert blk.occupant == t.id
                 assert bid not in seen, "two trains hold the same block!"
                 seen[bid] = t.id
+
+
+# ---- signal-based traffic control: junction interlock + priority ----------
+def test_traffic_priority_loaded_and_recall_beat_empty():
+    """Right-of-way policy: loaded or recalled trains outrank empty outbound ones
+    (lower key = higher priority), with id as a strict tiebreak (=> no cycles)."""
+    sim = Simulation(Config())
+    iron = next(p for p in sim.world.discovered_patches() if p.ore == "iron_ore")
+    _build_active(sim, iron.id)
+    t = next(iter(sim.trains.values()))
+    t.cargo.clear()
+    t.recall = False
+    empty_key = t.traffic_priority()
+    t.cargo["iron_ore"] = 500                         # now loaded
+    loaded_key = t.traffic_priority()
+    t.cargo.clear()
+    t.recall = True                                   # being recalled to storage
+    recall_key = t.traffic_priority()
+    assert loaded_key < empty_key                     # loaded gets right of way
+    assert recall_key < empty_key                     # recall clears out first
+    assert empty_key[1] == t.id                       # id is the tiebreak field
+
+
+def test_home_junction_interlock_single_occupant():
+    """The origin throat is interlocked: across a busy multi-field run at most one
+    train is ever physically inside it, the interlock actually engages (grants > 0),
+    and traffic keeps flowing (delivers, never permanently stalls)."""
+    cfg = Config()
+    cfg.llm.enabled = False
+    sim = Simulation(cfg)
+    director = Director(sim, cfg)
+    dt = 1 / 60
+    grants = 0
+    prev = None
+    worst_inside = 0
+    for _ in range(int(360 / dt)):
+        sim.tick(dt)
+        director.update()
+        occ = sim.net.junction_occupant
+        if occ is not None and occ != prev:
+            grants += 1
+        prev = occ
+        inside = sum(1 for t in sim.trains.values()
+                     if any(sim.net.in_junction(x, y) for (x, y, _a, _k) in t.car_poses()))
+        worst_inside = max(worst_inside, inside)
+        assert inside <= 1, "two trains were inside the home junction at once"
+    assert grants > 0, "junction interlock never engaged"
+    assert worst_inside == 1                          # it did get used
+    s = sim.stats()
+    assert s["delivered"] > 500
+    assert s["stalled_trains"] == 0                   # no deadlock at the throat
+
+
+def test_junction_chain_signal_turns_red_when_reserved():
+    """While a train holds the junction, the chain signal guarding the throat
+    reads red (so the queued trains see a stop aspect)."""
+    cfg = Config()
+    cfg.llm.enabled = False
+    sim = Simulation(cfg)
+    director = Director(sim, cfg)
+    dt = 1 / 60
+    saw_red = False
+    for _ in range(int(300 / dt)):
+        sim.tick(dt)
+        director.update()
+        if sim.net.junction_occupant is None:
+            continue
+        for sig in sim.net.signals.values():
+            near = sig.pos[0] ** 2 + sig.pos[1] ** 2 <= (sim.net.junction_radius
+                                                         + balance.LANE_OFFSET + 2.0) ** 2
+            if sig.kind == "chain" and near and sig.aspect == "red":
+                saw_red = True
+                break
+        if saw_red:
+            break
+    assert saw_red, "throat chain signal never showed red while the junction was held"

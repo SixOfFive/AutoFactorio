@@ -95,11 +95,21 @@ COAL_BURN_SECONDS = 6.67           # run-seconds added per 1 coal
 LOCO_FUEL_SLOTS = 3                # max coal a loco holds
 LOCO_START_FUEL = 3               # coal a freshly-built loco carries
 
-# Train-vs-train collision avoidance: a train yields to any LOWER-id train whose
-# car comes within COLLISION_DIST of the path just ahead, waiting until it clears
-# (handles crossings between different fields' loops, and departing into a crash).
+# Train-vs-train collision avoidance: a train yields to any HIGHER-PRIORITY train
+# (loaded/returning beats empty/outbound; id breaks ties) whose car comes within
+# COLLISION_DIST of the path just ahead, plus to whoever holds the home junction.
+# Handles crossings between different fields' loops and departing into a crash.
 TRAIN_COLLISION_DIST = 3.2         # tiles
 TRAIN_LOOKAHEAD = 4.0              # tiles ahead the head checks for obstacles
+
+# Home junction interlock: every loop fans out through the origin (0,0), so the
+# convergence there is a single interlocked junction. A train reserves it (a
+# chain signal at the throat) BEFORE entering and only one train crosses at a
+# time; the rest queue just outside instead of stopping in the crossing and
+# blocking cross-traffic. Higher-priority (loaded/returning) trains win the grant.
+JUNCTION_RADIUS = 8.0              # tiles around origin treated as the home junction
+JUNCTION_CLEAR = 1.5              # extra tiles the tail must pass before releasing
+JUNCTION_APPROACH = 6.0           # within this of the throat a train requests the grant
 
 # ---------------------------------------------------------------------------
 # Rail network

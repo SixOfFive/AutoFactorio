@@ -224,6 +224,7 @@ def load_into(sim, path: str) -> None:
                                     s["field_id"], s["is_home"], s["enabled"], s["coal_buffer"], None)
     c = data["net"]["counters"]
     net._nid, net._eid, net._bid, net._sid = c["nid"], c["eid"], c["bid"], c["sid"]
+    net.junction_occupant = None         # interlock is transient; re-granted on tick
 
     # fields
     sim.fields = {}

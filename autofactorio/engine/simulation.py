@@ -94,17 +94,30 @@ class Simulation:
         self.economy.research_furnace_mult = self.research.furnace_mult
         self.economy.update(dt)
 
-        # snapshot car positions so trains can see each other and yield (lower id
-        # has right of way -> the lowest-id train in any conflict always moves, so
-        # there is no deadlock).
+        # decide who holds the home-junction mutex this tick (granted by priority)
+        self._arbitrate_junction()
+        # snapshot car positions so trains can see each other and yield. Right of
+        # way goes to higher-priority trains (loaded/returning beat empty/outbound)
+        # and to whoever holds the junction; ties break by id so the order is
+        # strict -> there is always a train that yields to no one -> no deadlock.
         positions = {tid: t.car_poses() for tid, t in self.trains.items()}
-        for tid in sorted(self.trains.keys()):
+        holder = self.net.junction_occupant
+        for tid in sorted(self.trains.keys(),
+                          key=lambda i: self.trains[i].traffic_priority()):
             t = self.trains[tid]
-            obstacles = [(x, y) for otid, poses in positions.items() if otid < tid
-                         for (x, y, _a, _k) in poses]
+            if t.holds_junction:
+                obstacles = []                            # committed through the throat
+            else:
+                mykey = t.traffic_priority()
+                obstacles = [(x, y)
+                             for otid, ot in self.trains.items()
+                             if otid != tid
+                             and (ot.traffic_priority() < mykey or otid == holder)
+                             for (x, y, _a, _k) in positions[otid]]
             t.update_movement(dt, self.net, obstacles)
             if t.state == "waiting":
                 self._service_station(t, dt)
+        self.net.update_signals()
         self._reveal_along_trains()
         self._crush_animals()
         self._update_decommission()
@@ -153,6 +166,30 @@ class Simulation:
                         t.hp = max(0.0, t.hp - balance.TRAIN_CRUSH_DAMAGE)
                         self.log(f"Train #{t.id} crushed wildlife (-{int(balance.TRAIN_CRUSH_DAMAGE)} hp).")
                         break
+
+    def _arbitrate_junction(self) -> None:
+        """Interlock the home junction (the origin throat every loop crosses):
+        release it once the current holder's tail has cleared, then grant it to the
+        highest-priority train approaching it. At most one train is ever inside, so
+        departing trains never collide or block the crossing - the rest queue at the
+        chain signal just outside until it is their turn."""
+        net = self.net
+        occ = net.junction_occupant
+        if occ is not None:
+            t = self.trains.get(occ)
+            if t is None or t.clear_of_junction():
+                net.junction_occupant = None
+                if t is not None:
+                    t.holds_junction = False
+                occ = None
+        if occ is not None:
+            return                                        # still in use; others wait
+        requesters = [t for t in self.trains.values() if t.wants_junction()]
+        if not requesters:
+            return
+        winner = min(requesters, key=lambda t: t.traffic_priority())
+        net.junction_occupant = winner.id
+        winner.holds_junction = True
 
     def _reveal_along_trains(self) -> None:
         """Running trains chart their route: each car clears fog around it, so the

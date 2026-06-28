@@ -45,6 +45,10 @@ class Train:
         self.waiting_for_train = False   # yielding to another train ahead
         self.recall = False              # field decommissioned: return home and store
         self.locked: set[int] = set()
+        self.holds_junction = False      # currently granted the home-junction mutex
+        # arc-length span of this leg that lies inside the home junction (or None)
+        self.junc_enter: float | None = None
+        self.junc_exit: float | None = None
         # current-leg cached geometry
         self._pts: list[tuple[float, float]] = []
         self._cum: list[float] = []
@@ -93,6 +97,10 @@ class Train:
         self.head_s = 0.0
         self.speed = 0.0
         self.state = "moving"
+        # find where (if at all) this leg crosses the home junction throat
+        ji = _junction_interval(self._pts, self._cum,
+                                net.junction_center, net.junction_radius)
+        self.junc_enter, self.junc_exit = ji if ji else (None, None)
 
     def _block_at(self, dist: float) -> int | None:
         for s, e, bid in self._intervals:
@@ -163,6 +171,16 @@ class Train:
             else:
                 self.waiting_for_train = False
 
+        # home-junction interlock (chain signal at the throat): a train that does
+        # not hold the junction mutex must not cross into it - it queues just
+        # outside until the arbiter grants the mutex by priority (Simulation).
+        if (self.junc_enter is not None and not self.holds_junction
+                and self.head_s <= self.junc_enter + 1e-6
+                and target > self.junc_enter - 0.05):
+            target = max(self.head_s, self.junc_enter - 0.05)
+            self.speed = 0.0
+            self.waiting_for_train = True
+
         moved = target - self.head_s
         if moved > 0:
             self.fuel_seconds -= dt
@@ -196,6 +214,35 @@ class Train:
     def depart(self, net: RailNetwork) -> None:
         self.begin_leg(net, (self.cur_leg + 1) % len(self.legs))
 
+    # ---- traffic priority / junction interlock ----------------------------
+    def traffic_priority(self) -> tuple[int, int]:
+        """Sort key (lower = higher priority / right of way). Loaded or recalled
+        trains clear the network first; empty outbound trains yield. Id breaks
+        ties so the order is strict (=> no yield cycles, no deadlock)."""
+        cls = 0 if (self.recall or self.cargo_total() > 0) else 1
+        return (cls, self.id)
+
+    def wants_junction(self) -> bool:
+        """Approaching the junction throat on this leg and not yet holding it."""
+        if self.junc_enter is None or self.holds_junction or self.state != "moving":
+            return False
+        if self.junc_exit is not None and self.head_s > self.junc_exit:
+            return False
+        return (self.junc_enter - self.head_s) <= balance.JUNCTION_APPROACH
+
+    def clear_of_junction(self) -> bool:
+        """True once the whole train is past the junction span on its current leg
+        (so the mutex can be released)."""
+        if self.junc_exit is None:
+            return True
+        return (self.head_s - balance.MAX_TRAIN_LEN) > self.junc_exit
+
+    def touches_junction(self, net: RailNetwork) -> bool:
+        for (x, y, _a, _k) in self.car_poses():
+            if net.in_junction(x, y, balance.JUNCTION_CLEAR):
+                return True
+        return False
+
     # ---- rendering --------------------------------------------------------
     def car_poses(self) -> list[tuple[float, float, float, str]]:
         """(x, y, angle_deg, kind) for the loco + each wagon, front to back.
@@ -219,6 +266,52 @@ class Train:
     @property
     def current_station_id(self) -> int:
         return self.legs[self.cur_leg].station_id
+
+
+def _junction_interval(pts, cum, center, radius):
+    """Arc-length span [enter, exit] of a polyline that lies within `radius` of
+    `center`, computed analytically per segment (so a long straight that crosses
+    the throat between sparse endpoints is still caught). Returns None if it never
+    enters. The span is the min-enter/max-exit envelope, so a train holds the
+    interlock continuously even if the path grazes out and back in."""
+    cx, cy = center
+    r2 = radius * radius
+    enter = None
+    exit_ = None
+    for i in range(1, len(pts)):
+        ax, ay = pts[i - 1]
+        bx, by = pts[i]
+        dx, dy = bx - ax, by - ay
+        fx, fy = ax - cx, ay - cy
+        A = dx * dx + dy * dy
+        seglen = cum[i] - cum[i - 1]
+        if A < 1e-12:                                   # zero-length segment
+            if fx * fx + fy * fy <= r2:
+                lo = hi = cum[i - 1]
+            else:
+                continue
+        else:
+            B = 2.0 * (fx * dx + fy * dy)
+            C = fx * fx + fy * fy - r2
+            disc = B * B - 4.0 * A * C
+            if disc < 0.0:
+                continue                                # never within radius
+            sq = math.sqrt(disc)
+            t0 = (-B - sq) / (2.0 * A)
+            t1 = (-B + sq) / (2.0 * A)
+            t0 = max(0.0, min(1.0, t0))
+            t1 = max(0.0, min(1.0, t1))
+            if t1 - t0 <= 1e-9:
+                continue                                # tangent / outside [0,1]
+            lo = cum[i - 1] + t0 * seglen
+            hi = cum[i - 1] + t1 * seglen
+        if enter is None or lo < enter:
+            enter = lo
+        if exit_ is None or hi > exit_:
+            exit_ = hi
+    if enter is None:
+        return None
+    return (enter, exit_)
 
 
 def _cumulative(pts: list[tuple[float, float]]) -> list[float]:

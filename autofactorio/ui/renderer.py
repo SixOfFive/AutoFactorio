@@ -140,24 +140,39 @@ class Renderer:
         pygame.draw.polygon(screen, ARROW, [tip, left, right])
 
     def _stations(self, screen, cam, sim):
+        self._junction(screen, cam, sim)
         show_sig = cam.zoom >= 8
         if show_sig:
             for nid, sig in sim.net.signals.items():
                 sx, sy = cam.world_to_screen(*sig.pos)
                 if not self._on(cam, sx, sy):
                     continue
-                occ = False
-                for eid in sim.net.out_edges.get(nid, []):
-                    blk = sim.net.blocks.get(sim.net.edges[eid].block_id)
-                    if blk and blk.occupant is not None:
-                        occ = True
-                        break
-                col = SIG_RED if occ else SIG_GREEN
+                col = SIG_RED if sig.aspect == "red" else SIG_GREEN
                 r = max(2, int(0.16 * cam.zoom))
-                pygame.draw.circle(screen, (10, 12, 16), (int(sx), int(sy)), r + 1)
-                pygame.draw.circle(screen, col, (int(sx), int(sy)), r)
+                if sig.kind == "chain":            # chain signal: diamond, not dot
+                    pts = [(sx, sy - r - 1), (sx + r + 1, sy),
+                           (sx, sy + r + 1), (sx - r - 1, sy)]
+                    pygame.draw.polygon(screen, (10, 12, 16), pts)
+                    pts = [(sx, sy - r), (sx + r, sy), (sx, sy + r), (sx - r, sy)]
+                    pygame.draw.polygon(screen, col, pts)
+                else:
+                    pygame.draw.circle(screen, (10, 12, 16), (int(sx), int(sy)), r + 1)
+                    pygame.draw.circle(screen, col, (int(sx), int(sy)), r)
         for st in sim.net.stations.values():
             self._blit(screen, cam, "train_stop", st.pos[0], st.pos[1], 2.0)
+
+    def _junction(self, screen, cam, sim):
+        """Outline the home junction throat; tint it red while a train holds it."""
+        if cam.zoom < 5:
+            return
+        cx, cy = sim.net.junction_center
+        sx, sy = cam.world_to_screen(cx, cy)
+        rad = int(sim.net.junction_radius * cam.zoom)
+        if not self._on(cam, sx, sy, rad + 10):
+            return
+        busy = sim.net.junction_occupant is not None
+        col = (150, 90, 70) if busy else (70, 78, 92)
+        pygame.draw.circle(screen, col, (int(sx), int(sy)), rad, max(1, int(cam.zoom * 0.05)))
 
     def _fields(self, screen, cam, sim):
         for f in sim.fields.values():
