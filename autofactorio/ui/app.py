@@ -244,7 +244,12 @@ class App:
         for k in order:
             v = eco.inv.get(k, 0)
             if v:
-                lines.append((f"  {balance.DISPLAY_NAME.get(k, k):16s}{v}", False))
+                # the auto-crafter caps buildables at their stock target; show
+                # actual/max for those. Raw ores/plates/intermediates are uncapped
+                # (they just accumulate), so they show the bare amount.
+                cap = balance.STOCK_TARGETS.get(k)
+                val = f"{v}/{cap}" if cap else f"{v}"
+                lines.append((f"  {balance.DISPLAY_NAME.get(k, k):16s}{val}", False))
         lines.append(("", False))
         lines.append((f"Produced: {eco.total_smelted} smelted, {eco.total_crafted} crafted", False))
         lines.append((f"Delivered home: {self.sim.delivered_total}", False))
