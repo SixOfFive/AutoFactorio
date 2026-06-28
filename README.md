@@ -61,7 +61,14 @@ Useful flags:
 
 ## The LLM director
 
-The director talks to an **OpenAI-compatible** endpoint (your LAN's *Golden Eye* gateway). To point it at a different server or model, set the **location (`url`)** and **`model`** in either of two places:
+The director speaks the **OpenAI-compatible Chat Completions API** — it sends `POST {url}/v1/chat/completions` with a forced-JSON `response_format`. That means it works with any server exposing that API, including:
+
+- **Ollama** — which serves an OpenAI-compatible endpoint at `http://localhost:11434/v1` (use `url: "http://localhost:11434"`, e.g. `ollama pull qwen3:4b`),
+- **llama.cpp** `server`, **LM Studio**, **vLLM**, **text-generation-webui**, the LAN *Golden Eye* gateway (the default — itself Ollama-backed), or **OpenAI** itself.
+
+> Set `url` to the **base** address only — the client appends `/v1/chat/completions` for you. So for Ollama it's `http://localhost:11434`, **not** `.../v1`.
+
+To point it at a different server or model, set the **location (`url`)** and **`model`** in either of two places:
 
 **`config.json`** — copy `config.example.json` to `config.json` (gitignored) and edit:
 
@@ -72,7 +79,8 @@ The director talks to an **OpenAI-compatible** endpoint (your LAN's *Golden Eye*
 **Environment variables** (handy for a one-off, and they win over `config.json`):
 
 ```sh
-AUTOFACTORIO_LLM_URL=http://10.0.0.5:11434  AUTOFACTORIO_MODEL=llama3.1:8b  .venv\Scripts\python run.py
+# point at a local Ollama instance
+AUTOFACTORIO_LLM_URL=http://localhost:11434  AUTOFACTORIO_MODEL=llama3.1:8b  .venv\Scripts\python run.py
 ```
 
 Built-in defaults live in `autofactorio/config.py`. To run fully offline with no endpoint at all, use `--fallback` (or set `"enabled": false`).
