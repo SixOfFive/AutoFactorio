@@ -207,6 +207,7 @@ class App:
         else:
             hint = self.hint_font.render(HINT, True, (150, 156, 166))
             self.screen.blit(hint, (10, self.screen.get_height() - 22))
+        self.hud.draw_tooltip(self.screen)        # drawn last so it sits on top
 
     def _draw_selection_readout(self) -> None:
         if not self.selected:

@@ -1,4 +1,7 @@
-"""Top HUD: key inventory, network stats, game speed, and director status."""
+"""Top HUD: key inventory, network stats, game speed, and director status.
+
+Every value on the bar is a hover zone: mousing over it shows a tooltip with the
+item's/stat's full name and what it is for (see draw_tooltip)."""
 
 from __future__ import annotations
 
@@ -18,6 +21,41 @@ _INV = [
     ("electric_drill", "Drill"), ("locomotive", "Loco"), ("cargo_wagon", "Wagon"),
 ]
 
+# (title, description) shown on hover. Keys match inventory items + stat ids below.
+INFO = {
+    "iron_plate": ("Iron plate", "Smelted from iron ore. The backbone material — rails, gears, "
+                                 "circuits, drills, trains and almost everything need it."),
+    "copper_plate": ("Copper plate", "Smelted from copper ore. Drawn into copper cable for "
+                                     "electronic circuits."),
+    "steel_plate": ("Steel plate", "Smelted from iron plate (5 plates → 1 steel). Used for rails, "
+                                   "locomotives, wagons and robots."),
+    "stone": ("Stone", "Mined raw. Crafts into rails and stone furnaces."),
+    "coal": ("Coal", "Mined raw. Fuels every locomotive — trains burn it to move. Robots can haul "
+                     "extra as a slow last resort when it runs low."),
+    "rail": ("Rail", "Track pieces. Robots drive out and lay these to connect new mining fields "
+                     "to the base."),
+    "electric_drill": ("Electric drill", "Mines an ore patch. More drills per field = faster "
+                                         "mining. Robots place them when building a field."),
+    "locomotive": ("Locomotive", "Pulls a train and burns coal. One per mining-field loop."),
+    "cargo_wagon": ("Cargo wagon", "Hauls ore from a field to the base (2 per train by default). "
+                                   "Research increases its capacity."),
+    "time": ("Elapsed time", "How long this game has been running."),
+    "fields": ("Mining fields", "Active fields mining ore. Robots build new ones and tear down "
+                                "exhausted ones."),
+    "trains": ("Trains", "Locomotives hauling ore from fields to the base on one-way loops."),
+    "rail_stat": ("Rail network", "Total length of track currently laid, in tiles."),
+    "delivered": ("Ore delivered", "Total ore unloaded at the base so far."),
+    "robots": ("Robots", "Up to 3. They build/dismantle fields, repair trains, fight wildlife, "
+                         "gather emergency fuel and explore."),
+    "animals": ("Wildlife", "Herds that wander and can spawn in the fog. Robots cull them and "
+                            "trains crush them; they only fight back if a robot is replaceable."),
+    "tech": ("Research", "Current tech level and the next tech in progress. Techs compound the "
+                        "whole economy (mining, trains, smelting, unloading)."),
+    "speed": ("Game speed", "Simulation speed. Press + / - to change, Space to pause."),
+    "director": ("Director", "The AI making expansion decisions — the LLM when reachable, else the "
+                            "built-in heuristic (it auto-reconnects)."),
+}
+
 
 def _fmt(n: int) -> str:
     if n >= 1_000_000:
@@ -34,9 +72,11 @@ class Hud:
         self.font = font
         self.small = small
         self.big = big
+        self._zones: list[tuple[pygame.Rect, str]] = []   # (rect, info-key)
 
     def draw(self, screen, sim, director, detailed: bool) -> None:
         w = screen.get_width()
+        self._zones = []
         bar = pygame.Surface((w, 64), pygame.SRCALPHA)
         bar.fill((*PANEL, 215))
         screen.blit(bar, (0, 0))
@@ -51,39 +91,79 @@ class Hud:
                 col = BAD if val < 150 else WARN if val < 400 else GOOD
             surf = self.small.render(chip, True, col)
             screen.blit(surf, (x, 8))
+            self._zones.append((pygame.Rect(x, 6, surf.get_width(), 20), key))
             x += surf.get_width() + 18
 
-        # row 2: stats
+        # row 2: stats (each segment is its own hover zone)
         s = sim.stats()
         mm, ss = divmod(int(sim.time), 60)
         nxt = sim.research.next_tech()
         tech = f"Tech L{s['tech_level']}" + (f"→{nxt['name']}" if nxt else " (max)")
-        stats = (f"⏱ {mm:02d}:{ss:02d}   Fields {s['fields']}   Trains {s['trains']}"
-                 f"   Rail {_fmt(s['rail_tiles'])}t   Delivered {_fmt(s['delivered'])}"
-                 f"   Robots {s['robots']}/{s['max_robots']}   Animals {s['animals']}"
-                 f" (killed {_fmt(s['kills'])})   {tech}")
-        screen.blit(self.small.render(stats, True, DIM), (12, 34))
+        segs = [
+            (f"⏱ {mm:02d}:{ss:02d}", "time"),
+            (f"Fields {s['fields']}", "fields"),
+            (f"Trains {s['trains']}", "trains"),
+            (f"Rail {_fmt(s['rail_tiles'])}t", "rail_stat"),
+            (f"Delivered {_fmt(s['delivered'])}", "delivered"),
+            (f"Robots {s['robots']}/{s['max_robots']}", "robots"),
+            (f"Animals {s['animals']} (killed {_fmt(s['kills'])})", "animals"),
+            (tech, "tech"),
+        ]
+        x = 12
+        for text, key in segs:
+            surf = self.small.render(text, True, DIM)
+            screen.blit(surf, (x, 34))
+            self._zones.append((pygame.Rect(x, 32, surf.get_width(), 18), key))
+            x += surf.get_width() + 16
 
         # right side: speed + director
-        spd = f"{'PAUSED' if sim.paused else f'{sim.speed:g}x'}"
+        spd = "PAUSED" if sim.paused else f"{sim.speed:g}x"
         spd_s = self.font.render(spd, True, WARN if sim.paused else TEXT)
-        screen.blit(spd_s, (w - spd_s.get_width() - 14, 8))
+        sx = w - spd_s.get_width() - 14
+        screen.blit(spd_s, (sx, 8))
+        self._zones.append((pygame.Rect(sx, 6, spd_s.get_width(), 22), "speed"))
 
-        if not director.use_llm:
-            col = DIM
-        elif director.online:
-            col = AI
-        else:
-            col = WARN
+        col = DIM if not director.use_llm else (AI if director.online else WARN)
         ds = self.small.render(director.status_text(), True, col)
-        screen.blit(ds, (w - ds.get_width() - 14, 38))
+        dx = w - ds.get_width() - 14
+        screen.blit(ds, (dx, 38))
+        self._zones.append((pygame.Rect(dx, 36, ds.get_width(), 18), "director"))
 
         if s["stalled_trains"]:
             warn = self.small.render(f"⚠ {s['stalled_trains']} train(s) out of fuel", True, BAD)
-            screen.blit(warn, (w // 2 - warn.get_width() // 2, 44))
+            screen.blit(warn, (w // 2 - warn.get_width() // 2, 50))
 
         if detailed:
             self._panel(screen, sim, director)
+
+    # ---- tooltip (drawn last so it sits above everything) -----------------
+    def draw_tooltip(self, screen) -> None:
+        mx, my = pygame.mouse.get_pos()
+        key = None
+        for rect, k in self._zones:
+            if rect.collidepoint(mx, my):
+                key = k
+                break
+        if key is None or key not in INFO:
+            return
+        title, desc = INFO[key]
+        width = 320
+        lines = _wrap(self.small, desc, width - 20)
+        title_s = self.font.render(title, True, TEXT)
+        line_surfs = [self.small.render(ln, True, DIM) for ln in lines]
+        h = 12 + title_s.get_height() + 4 + sum(ls.get_height() + 2 for ls in line_surfs)
+        bx = min(mx + 14, screen.get_width() - width - 8)
+        by = min(my + 18, screen.get_height() - h - 8)
+
+        box = pygame.Surface((width, h), pygame.SRCALPHA)
+        box.fill((10, 12, 17, 240))
+        screen.blit(box, (bx, by))
+        pygame.draw.rect(screen, (70, 76, 86), (bx, by, width, h), 1)
+        screen.blit(title_s, (bx + 10, by + 8))
+        y = by + 8 + title_s.get_height() + 4
+        for ls in line_surfs:
+            screen.blit(ls, (bx + 10, y))
+            y += ls.get_height() + 2
 
     def _panel(self, screen, sim, director):
         w = screen.get_width()
@@ -106,3 +186,19 @@ class Hud:
             col = AI if ln in ("INVENTORY", "FIELDS") else TEXT
             screen.blit(self.small.render(ln, True, col), (16, y))
             y += 16
+
+
+def _wrap(font, text, max_w):
+    words = text.split()
+    lines, cur = [], ""
+    for word in words:
+        trial = word if not cur else cur + " " + word
+        if font.size(trial)[0] <= max_w:
+            cur = trial
+        else:
+            if cur:
+                lines.append(cur)
+            cur = word
+    if cur:
+        lines.append(cur)
+    return lines

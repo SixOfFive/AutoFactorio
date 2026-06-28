@@ -42,6 +42,33 @@ def _build_active(sim, patch_id, max_s=60):
     _settle(sim, max_s)
 
 
+# ---- HUD tooltips ---------------------------------------------------------
+def test_hud_tooltips_cover_bar_and_render():
+    import unittest.mock as mock
+    import pygame
+    from autofactorio.ui.hud import Hud, INFO, _INV
+
+    keys = {k for k, _ in _INV} | {"time", "fields", "trains", "rail_stat",
+                                   "delivered", "robots", "animals", "tech",
+                                   "speed", "director"}
+    for k in keys:
+        assert k in INFO, f"no tooltip for {k}"
+
+    pygame.init()
+    screen = pygame.Surface((1280, 720))
+    f = pygame.font.SysFont("monospace", 14)
+    hud = Hud(f, f, f)
+    cfg = Config()
+    cfg.llm.enabled = False
+    sim = Simulation(cfg)
+    director = Director(sim, cfg)
+    hud.draw(screen, sim, director, False)
+    assert hud._zones
+    rect, _key = hud._zones[0]
+    with mock.patch.object(pygame.mouse, "get_pos", return_value=rect.center):
+        hud.draw_tooltip(screen)          # must not raise
+
+
 # ---- world / bootstrap ----------------------------------------------------
 def test_starter_patches_discovered():
     sim = Simulation(Config())
