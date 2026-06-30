@@ -91,7 +91,7 @@ class Simulation:
             if f.patch.depleted and f.id not in self._depleted_announced:
                 self._depleted_announced.add(f.id)
                 self.log(f"Field #{f.id} ({f.patch.ore.replace('_', ' ')}) patch is exhausted.")
-        self.economy.research_furnace_mult = self.research.furnace_mult
+        self._sync_research()
         self.economy.update(dt)
 
         # decide who holds the home-junction mutex this tick (granted by priority)
@@ -500,15 +500,22 @@ class Simulation:
             missing = {k: v for k, v in tech["cost"].items() if self.economy.inv.get(k, 0) < v}
             return False, f"insufficient for research '{tech['name']}': need {missing}"
         self.economy.spend(tech["cost"])
-        self.research.apply(tech)
+        self.research.advance()
         # propagate to existing trains
         for t in self.trains.values():
             t.max_speed = self.research.train_speed
             t.accel = self.research.train_accel
             t.capacity = t.wagons * self.research.wagon_capacity
-        self.economy.research_furnace_mult = self.research.furnace_mult
+        self._sync_research()
         self.log(f"Researched '{tech['name']}' (L{self.research.level}): {tech['desc']}.")
         return True, f"researched {tech['name']}"
+
+    def _sync_research(self) -> None:
+        """Push the current research multipliers into the economy (smelting,
+        crafting and storage all scale with tech level)."""
+        self.economy.research_furnace_mult = self.research.furnace_mult
+        self.economy.research_craft_mult = self.research.craft_mult
+        self.economy.research_storage_mult = self.research.storage_mult
 
     def build_assembler(self, n: int = 1) -> tuple[bool, str]:
         if not self.economy.spend({"assembler": n}):

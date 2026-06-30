@@ -208,7 +208,7 @@ def load_into(sim, path: str) -> None:
     sim.economy.total_crafted = e["total_crafted"]
     if "research" in data:
         sim.research.from_dict(data["research"])
-    sim.economy.research_furnace_mult = sim.research.furnace_mult
+    sim._sync_research()
 
     # rail network
     net = sim.net

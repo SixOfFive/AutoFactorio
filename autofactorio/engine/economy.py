@@ -51,7 +51,10 @@ class Economy:
         self.assemblers = balance.HOME_START["assemblers"]
         self._smelt_bank = 0.0
         self._craft_bank = 0.0
-        self.research_furnace_mult = 1.0    # lifted by Electric Smelting research
+        # research multipliers, pushed in by the Simulation each tick
+        self.research_furnace_mult = 1.0    # smelting speed
+        self.research_craft_mult = 1.0      # crafting speed
+        self.research_storage_mult = 1.0    # storage capacity (scales every cap)
         self.total_smelted = 0
         self.total_crafted = 0
 
@@ -72,7 +75,7 @@ class Economy:
         whether that means overflow lost or back-pressure)."""
         if qty <= 0:
             return 0
-        cap = self.caps.get(item)
+        cap = self.cap_of(item)
         if cap is None:
             self.inv[item] += qty
             return qty
@@ -83,16 +86,21 @@ class Economy:
         return take
 
     def cap_of(self, item: str) -> int | None:
-        return self.caps.get(item)
+        """Effective storage cap = the per-resource base (raised by built storage)
+        times the research storage multiplier. None for uncapped intermediates."""
+        base = self.caps.get(item)
+        if base is None:
+            return None
+        return int(base * self.research_storage_mult)
 
     def fill_fraction(self, item: str) -> float:
-        cap = self.caps.get(item)
+        cap = self.cap_of(item)
         if not cap:
             return 0.0
         return self.inv.get(item, 0) / cap
 
     def is_full(self, item: str) -> bool:
-        cap = self.caps.get(item)
+        cap = self.cap_of(item)
         return cap is not None and self.inv.get(item, 0) >= cap
 
     def take_coal(self, n: int) -> int:
@@ -102,19 +110,24 @@ class Economy:
 
     # ---- production -------------------------------------------------------
     def update(self, dt: float) -> None:
+        # smelting & crafting throughput scale with research; the bank cap scales
+        # too, else a tiny per-tick cap would throttle the tech multipliers away.
+        fmult = self.research_furnace_mult
         self._smelt_bank = min(self._smelt_bank
                                + self.furnaces * balance.FURNACE_SPEED[self.furnace_tier]
-                               * self.research_furnace_mult * dt,
-                               _SMELT_BANK_CAP)
+                               * fmult * dt,
+                               _SMELT_BANK_CAP * max(1.0, fmult))
         self._smelt()
-        self._craft_bank = min(self._craft_bank + self.assemblers * dt, _CRAFT_BANK_CAP)
+        cmult = self.research_craft_mult
+        self._craft_bank = min(self._craft_bank + self.assemblers * cmult * dt,
+                               _CRAFT_BANK_CAP * max(1.0, cmult))
         self._craft()
 
     def _smelt(self) -> None:
         for name in _SMELT_ORDER:
             rec = balance.SMELT_RECIPES[name]
             out_item = next(iter(rec["out"]))
-            cap = self.caps.get(out_item)
+            cap = self.cap_of(out_item)
             while self._smelt_bank >= rec["time"] and self.have(rec["in"]):
                 if cap is not None and self.inv.get(out_item, 0) >= cap:
                     break                              # storage for this plate is full
@@ -137,11 +150,16 @@ class Economy:
             guard += 1
             progress = False
             for item in _BUILD_ORDER:
-                # craft toward the stock target, but never past available storage
-                target = balance.STOCK_TARGETS.get(item, 0)
-                cap = self.caps.get(item)
-                if cap is not None:
-                    target = min(target, cap)
+                cap = self.cap_of(item)
+                if item == "science_pack":
+                    # fill science to its (tech-scaled) storage cap so the next,
+                    # ever-more-expensive research level can actually be funded
+                    target = cap if cap is not None else balance.STOCK_TARGETS.get(item, 0)
+                else:
+                    # craft toward the stock target, but never past available storage
+                    target = balance.STOCK_TARGETS.get(item, 0)
+                    if cap is not None:
+                        target = min(target, cap)
                 if self.inv.get(item, 0) >= target:
                     continue
                 if self._try_craft(item, depth=0):

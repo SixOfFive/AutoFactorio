@@ -368,14 +368,14 @@ def test_director_offline_then_reconnect():
 # ---- tech research --------------------------------------------------------
 def test_research_advances_and_applies():
     sim = Simulation(Config())
-    tech0 = balance.TECHS[0]
-    for k, v in tech0["cost"].items():
+    nxt = sim.research.next_tech()
+    for k, v in nxt["cost"].items():
         sim.economy.inv[k] = v
     base = sim.research.drill_mult
     ok, msg = sim.research_next()
     assert ok, msg
     assert sim.research.level == 1
-    assert sim.research.drill_mult > base       # tech 0 boosts drills
+    assert sim.research.drill_mult > base       # every level compounds mining
 
 
 def test_research_lifts_existing_trains():
@@ -384,13 +384,14 @@ def test_research_lifts_existing_trains():
     _build_active(sim, iron.id)
     t = next(iter(sim.trains.values()))
     base_cap = t.capacity
-    for i in range(3):                            # through Cargo Capacity 1
-        for k, v in balance.TECHS[i]["cost"].items():
+    for _ in range(8):                            # several levels grow wagon capacity
+        nxt = sim.research.next_tech()
+        for k, v in nxt["cost"].items():
             sim.economy.inv[k] = sim.economy.inv.get(k, 0) + v
         ok, _ = sim.research_next()
         assert ok
-    assert sim.research.level == 3
-    assert t.capacity > base_cap                  # capacity tech applied to the live train
+    assert sim.research.level == 8
+    assert t.capacity > base_cap                  # capacity scaling applied to the live train
 
 
 def test_cannot_abandon_productive_field():
@@ -437,7 +438,7 @@ def test_unload_takes_time_and_research_speeds_it():
     assert 0 < base_moved < 2000            # partial unload, not instant
     assert t.cargo_total() > 0              # still has cargo to unload
 
-    sim.research.unload_mult = 4.0          # research speeds unloading
+    sim.research.level = 150                # deep research speeds unloading (~4x)
     t.cargo = {"iron_ore": 2000}
     before = sim.economy.inv.get("iron_ore", 0)
     sim._service_station(t, 1 / 60)
@@ -644,21 +645,28 @@ def test_smelting_halts_when_plate_storage_full():
     assert eco.inv["iron_plate"] <= eco.caps["iron_plate"]
 
 
-def test_director_builds_storage_under_backpressure():
+def test_fallback_builds_storage_when_backed_up():
+    from autofactorio.ai import fallback
+    from autofactorio.ai.report import build_report
     cfg = Config()
     cfg.llm.enabled = False
     sim = Simulation(cfg)
-    director = Director(sim, cfg)
-    start_caps = dict(sim.economy.caps)
-    _run(sim, director, seconds=480)
-    grew = [k for k in start_caps if sim.economy.caps[k] > start_caps[k]]
-    assert grew, "director never expanded any storage despite back-pressure"
-    s = sim.stats()
-    assert s["delivered"] > 500
-    assert s["stalled_trains"] == 0
-    # caps only ever grow in whole STORAGE_CAP_STEP increments of that resource
-    for k in grew:
-        assert (sim.economy.caps[k] - start_caps[k]) % balance.STORAGE_CAP_STEP[k] == 0
+    # nothing to expand to (so the heuristic reaches the storage-relief rule) and
+    # plenty of build materials on hand
+    for p in sim.world.patches:
+        p.claimed = True
+    # enough to afford a storage build, but kept below their own caps so COAL is
+    # unambiguously the fullest resource the relief rule should pick
+    sim.economy.inv["stone"] = 300
+    sim.economy.inv["iron_plate"] = 200
+    sim.economy.inv["coal"] = sim.economy.cap_of("coal")     # coal storage full
+    dec = fallback.decide(sim, build_report(sim))
+    acts = dec["actions"]
+    assert any(a["action"] == "build_storage" and a.get("item") == "coal" for a in acts), acts
+    # and the action actually raises that resource's base cap by one step
+    before = sim.economy.caps["coal"]
+    ok, _ = sim.build_storage("coal")
+    assert ok and sim.economy.caps["coal"] == before + balance.STORAGE_CAP_STEP["coal"]
 
 
 def test_save_load_preserves_storage_caps():

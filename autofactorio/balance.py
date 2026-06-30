@@ -269,30 +269,85 @@ TRAIN_DAMAGED_SPEED = 0.5          # speed multiplier while heavily damaged
 FUEL_CRITICAL = 60                 # home coal below this triggers robot fuel runs
 
 # ---------------------------------------------------------------------------
-# Tech tree (researched in order; each spends its cost and applies its effect)
+# Tech tree (1000 levels; effects are COMPUTED from the level, not hand-authored)
 # ---------------------------------------------------------------------------
-BASE_MAX_ROBOTS = 3                # up to 3 robots (explore + build + fight); the
-                                   # director deploys them from crafted stock
+# The director researches one level at a time, spending tech_cost(level) science.
+# Every multiplier is a closed-form function of the current level: tiny per-level
+# gains that COMPOUND, so the empire starts near 1x and, deep into the hundreds,
+# mining/smelting/crafting/storage/construction run orders of magnitude faster.
+# Reaching the hundreds takes a long time (many research steps + rising cost), so
+# it's a slow burn that snowballs - classic idle-game curve. All capped so the
+# simulation stays numerically sane.
+import math as _math
 
-TECHS = [
-    {"name": "Mining Productivity 1", "cost": {"science_pack": 10},
-     "effect": {"drill_mult": 1.5}, "desc": "+50% drill output"},
-    {"name": "Train Braking 1", "cost": {"science_pack": 14},
-     "effect": {"train_speed": 1.25, "train_accel": 1.3}, "desc": "faster trains"},
-    {"name": "Cargo Capacity 1", "cost": {"science_pack": 18},
-     "effect": {"wagon_capacity": 1.5, "unload_mult": 1.6}, "desc": "+50% wagon capacity, faster unload"},
-    {"name": "Electric Smelting", "cost": {"science_pack": 24},
-     "effect": {"furnace_mult": 1.5}, "desc": "+50% smelting speed"},
-    {"name": "Rail Engineering", "cost": {"science_pack": 30},
-     "effect": {"rail_discount": 0.8, "unload_mult": 1.5}, "desc": "-20% rail cost, faster unload"},
-    {"name": "Mining Productivity 2", "cost": {"science_pack": 40},
-     "effect": {"drill_mult": 1.5}, "desc": "+50% drill output"},
-    {"name": "Mining Productivity 3", "cost": {"science_pack": 50},
-     "effect": {"drill_mult": 1.5}, "desc": "+50% drill output"},
-    {"name": "Cargo Capacity 2", "cost": {"science_pack": 64},
-     "effect": {"wagon_capacity": 1.5, "unload_mult": 1.6}, "desc": "+50% wagon capacity, faster unload"},
-    {"name": "Train Braking 2", "cost": {"science_pack": 80},
-     "effect": {"train_speed": 1.25, "train_accel": 1.3}, "desc": "faster trains"},
-    {"name": "Electric Smelting 2", "cost": {"science_pack": 100},
-     "effect": {"furnace_mult": 1.5}, "desc": "+50% smelting speed"},
+BASE_MAX_ROBOTS = 3                # starting robot cap (raised by Robotics tech)
+MAX_TECH_LEVEL = 1000
+
+
+def _compound(level: int, rate: float, cap: float) -> float:
+    """(1+rate)^level, clamped to cap. ~1%/level => 2.7x at L100, ~145x at L500."""
+    if level <= 0:
+        return 1.0
+    return min(cap, (1.0 + rate) ** level)
+
+
+def _approach(level: int, ceiling: float, half: float) -> float:
+    """Smoothly rise from 1x toward `ceiling`, reaching the half-way point of the
+    gain at `half` levels. Used for speeds that must NOT blow up (trains/robots)."""
+    return 1.0 + (ceiling - 1.0) * (1.0 - 0.5 ** (level / half))
+
+
+# throughput multipliers (these are allowed to get very large; storage caps and
+# downstream consumption keep the economy from trivially overflowing)
+def mining_mult(level: int) -> float:   return _compound(level, 0.011, 4000.0)
+def furnace_mult(level: int) -> float:  return _compound(level, 0.010, 2000.0)
+def craft_mult(level: int) -> float:    return _compound(level, 0.010, 2000.0)
+def storage_mult(level: int) -> float:  return _compound(level, 0.009, 2000.0)
+def unload_mult(level: int) -> float:   return _compound(level, 0.010, 3000.0)
+def wagon_mult(level: int) -> float:    return _compound(level, 0.008, 200.0)
+
+# speed multipliers (kept bounded so trains/robots stay controllable on the rails)
+def train_speed_mult(level: int) -> float:   return _approach(level, 3.0, 120.0)
+def train_accel_mult(level: int) -> float:   return _approach(level, 4.0, 120.0)
+def construction_mult(level: int) -> float:  return _approach(level, 6.0, 160.0)
+
+def rail_discount(level: int) -> float:      return max(0.25, 1.0 - 0.0008 * level)
+def max_robots(level: int) -> int:           return min(12, BASE_MAX_ROBOTS + level // 70)
+
+
+def tech_cost(level: int) -> int:
+    """Science to research TO `level`. Rises ~1%/level so it tracks (a little
+    behind) the compounding science output, making progress accelerate."""
+    return int(round(8.0 * (1.01 ** level) + level))
+
+
+# Flavour: rotating category names so each researched level reads like a real tech.
+_TECH_TRACKS = [
+    ("Mining Productivity", "+mining throughput"),
+    ("Logistics", "+train capacity & unload speed"),
+    ("Automation", "+crafting speed"),
+    ("Electric Smelting", "+smelting speed"),
+    ("Warehousing", "+storage capacity"),
+    ("Construction Robotics", "+construction speed & robots"),
+    ("Rail Engineering", "-rail cost, +train speed"),
 ]
+# Space-program milestones unlock orbital cargo ships (see Simulation).
+SPACE_TECH_LEVEL = 40              # first launch capability
+_SPACE_NAMES = ["Orbital Logistics", "Interplanetary Trade", "Deep-Space Freight",
+                "Galactic Commerce"]
+
+
+def tech_for_level(level: int) -> dict | None:
+    """Describe the tech researched to reach `level` (1..MAX_TECH_LEVEL)."""
+    if level < 1 or level > MAX_TECH_LEVEL:
+        return None
+    if level == SPACE_TECH_LEVEL:
+        name, desc = "Spaceflight", "unlocks orbital cargo ships (trade for science)"
+    elif level > SPACE_TECH_LEVEL and level % 80 == 0:
+        sp = _SPACE_NAMES[min(len(_SPACE_NAMES) - 1, level // 80 - 1)]
+        name, desc = sp, "bigger, more frequent orbital trade"
+    else:
+        track, desc = _TECH_TRACKS[level % len(_TECH_TRACKS)]
+        tier = level // len(_TECH_TRACKS) + 1
+        name = f"{track} {tier}"
+    return {"name": name, "desc": desc, "cost": {"science_pack": tech_cost(level)}}

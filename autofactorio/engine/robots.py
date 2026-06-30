@@ -209,7 +209,7 @@ class Robots:
         if a is None:
             self._do_explore(sim, r, dt)
             return
-        d = r.move_toward(a.x, a.y, balance.ROBOT_SPEED, dt)
+        d = r.move_toward(a.x, a.y, balance.ROBOT_SPEED * sim.research.construction_mult, dt)
         if d <= balance.ROBOT_ATTACK_RANGE:
             self._attack(sim, r, a)
 
@@ -218,7 +218,8 @@ class Robots:
         a = sim.animals.nearest(r.x, r.y, balance.ROBOT_ATTACK_RANGE + 0.5)
         if a is not None:
             self._attack(sim, r, a)
-        d = r.move_toward(r.tx, r.ty, balance.ROBOT_SPEED if not r.explorer else balance.SCOUT_SPEED, dt)
+        base = balance.ROBOT_SPEED if not r.explorer else balance.SCOUT_SPEED
+        d = r.move_toward(r.tx, r.ty, base * sim.research.construction_mult, dt)
         if d < 1.0:
             r._advance_spiral()
 
@@ -230,7 +231,7 @@ class Robots:
         head = _train_head(t)
         if head is None:
             return
-        d = r.move_toward(head[0], head[1], balance.ROBOT_SPEED, dt)
+        d = r.move_toward(head[0], head[1], balance.ROBOT_SPEED * sim.research.construction_mult, dt)
         if d <= balance.ROBOT_ATTACK_RANGE + 1.0:
             t.hp = min(t.max_hp, t.hp + balance.ROBOT_REPAIR_RATE * dt)
 
@@ -242,7 +243,7 @@ class Robots:
             r.task = "explore"
             r.target = None
             return
-        d = r.move_toward(job.x, job.y, balance.ROBOT_SPEED, dt)
+        d = r.move_toward(job.x, job.y, balance.ROBOT_SPEED * sim.research.construction_mult, dt)
         if d <= 2.5:
             sim.complete_job(job)
             r.task = "explore"
@@ -259,13 +260,13 @@ class Robots:
                 r.dismantle_phase = None
                 r.task = "explore"
                 return
-            d = r.move_toward(field.patch.cx, field.patch.cy, balance.ROBOT_SPEED, dt)
+            d = r.move_toward(field.patch.cx, field.patch.cy, balance.ROBOT_SPEED * sim.research.construction_mult, dt)
             if d <= 2.5:
                 r.carry_reclaim = sim.teardown_field_track(field)
                 r.dismantle_phase = "to_home"
                 sim.log(f"Robot #{r.id} tore up field #{r.target}'s track; hauling salvage home.")
         elif r.dismantle_phase == "to_home":
-            d = r.move_toward(0.0, 0.0, balance.ROBOT_SPEED, dt)
+            d = r.move_toward(0.0, 0.0, balance.ROBOT_SPEED * sim.research.construction_mult, dt)
             if d < 2.5:
                 # deposit only what storage can hold; keep the rest and retry next
                 # tick (back-pressure) so finite storage never silently eats salvage.
@@ -298,7 +299,7 @@ class Robots:
             r.fuel_phase = "to_coal"
         if r.fuel_phase == "return" or r.carry_coal >= balance.ROBOT_FUEL_CARRY:
             r.fuel_phase = "return"
-            d = r.move_toward(0, 0, balance.ROBOT_SPEED, dt)
+            d = r.move_toward(0, 0, balance.ROBOT_SPEED * sim.research.construction_mult, dt)
             if d < 2.5:
                 sim.economy.add("coal", int(r.carry_coal))
                 if r.carry_coal:
@@ -313,7 +314,7 @@ class Robots:
             r.task = "explore"
             r.fuel_phase = None
             return
-        d = r.move_toward(patch.cx, patch.cy, balance.ROBOT_SPEED, dt)
+        d = r.move_toward(patch.cx, patch.cy, balance.ROBOT_SPEED * sim.research.construction_mult, dt)
         if d <= 2.5:
             got = min(balance.ROBOT_FUEL_GATHER_RATE * dt, patch.reserve)
             patch.mine(got)
