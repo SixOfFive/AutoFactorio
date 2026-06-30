@@ -52,8 +52,11 @@ INFO = {
                          "gather emergency fuel and explore."),
     "animals": ("Wildlife", "Herds that wander and can spawn in the fog. Robots cull them and "
                             "trains crush them; they only fight back if a robot is replaceable."),
-    "tech": ("Research", "Current tech level and the next tech in progress. Techs compound the "
-                        "whole economy (mining, trains, smelting, unloading)."),
+    "tech": ("Research", "Current tech level (up to 1000) and the next tech in progress. Each "
+                        "level compounds the whole economy — mining, smelting, crafting, storage, "
+                        "construction — so it snowballs into the hundreds."),
+    "ships": ("Orbital trade", "Cargo rockets launched from the base once Spaceflight is researched. "
+                              "Each consumes a payload and trades it back for science, accelerating research."),
     "speed": ("Game speed", "Simulation speed. Press + / - to change, Space to pause."),
     "director": ("Director", "The AI making expansion decisions — the LLM when reachable, else the "
                             "built-in heuristic (it auto-reconnects)."),
@@ -119,6 +122,8 @@ class Hud:
             (f"Animals {s['animals']} (killed {_fmt(s['kills'])})", "animals"),
             (tech, "tech"),
         ]
+        if s.get("spaceflight"):
+            segs.append((f"Ships {_fmt(s['ships_launched'])}", "ships"))
         x = 12
         for text, key in segs:
             surf = self.small.render(text, True, DIM)

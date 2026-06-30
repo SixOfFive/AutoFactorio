@@ -336,6 +336,23 @@ SPACE_TECH_LEVEL = 40              # first launch capability
 _SPACE_NAMES = ["Orbital Logistics", "Interplanetary Trade", "Deep-Space Freight",
                 "Galactic Commerce"]
 
+# Orbital cargo ships: once Spaceflight is researched the base periodically launches
+# a rocket that consumes a payload of goods and trades it for SCIENCE (which feeds
+# back into the tech tree). Tech makes launches more frequent and more lucrative.
+SHIP_COST = {"steel_plate": 20, "electronic_circuit": 10, "coal": 40}
+SHIP_LAUNCH_INTERVAL = 22.0        # base seconds between launches (shrinks with tech)
+SHIP_REWARD_SCIENCE = 25           # base science traded back per launch (scales w/ level)
+SHIP_CLIMB_SPEED = 16.0            # tiles/sec the rocket ascends on screen
+SHIP_ASCEND_TILES = 64.0           # distance up before it reaches orbit and delivers
+
+
+def ship_reward(level: int) -> int:
+    return int(SHIP_REWARD_SCIENCE * (1.0 + level / 20.0))
+
+
+def ship_interval(level: int) -> float:
+    return SHIP_LAUNCH_INTERVAL / (1.0 + level / 200.0)
+
 
 def tech_for_level(level: int) -> dict | None:
     """Describe the tech researched to reach `level` (1..MAX_TECH_LEVEL)."""

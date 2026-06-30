@@ -6,6 +6,7 @@ transform; the viewport is culled so map size doesn't cost frames.
 from __future__ import annotations
 
 import math
+import random
 
 import numpy as np
 import pygame
@@ -26,9 +27,11 @@ SIG_RED = (228, 86, 70)
 class Renderer:
     def __init__(self, assets: Assets):
         self.a = assets
+        self.smoke: list[dict] = []          # steam/exhaust puffs (world coords)
+        self._smoke_accum: dict[int, float] = {}   # per-train spawn carry
 
     # ---- public -----------------------------------------------------------
-    def draw(self, screen: pygame.Surface, cam, sim, selected=None) -> None:
+    def draw(self, screen: pygame.Surface, cam, sim, selected=None, dt: float = 0.0) -> None:
         screen.fill(GRASS)
         self._decor(screen, cam, sim)
         self._patches(screen, cam, sim)
@@ -36,11 +39,13 @@ class Renderer:
         self._stations(screen, cam, sim)
         self._fields(screen, cam, sim)
         self._home(screen, cam, sim)
-        self._trains(screen, cam, sim)
+        self._trains(screen, cam, sim, dt)
         self._animals(screen, cam, sim)
         self._robots(screen, cam, sim)
+        self._particles(screen, cam, dt)
         self._selection(screen, cam, sim, selected)
         self._fog(screen, cam, sim.world)
+        self._ships(screen, cam, sim)        # rockets climb above the fog, into the sky
 
     def _decor(self, screen, cam, sim):
         world = sim.world
@@ -216,32 +221,114 @@ class Renderer:
             a = i / max(1, na) * 2 * math.pi + 0.3
             self._blit(screen, cam, "assembler", math.cos(a) * 6.8, math.sin(a) * 6.8, 1.6)
 
-    def _trains(self, screen, cam, sim):
+    # locomotive / wagon sprite sets, indexed by train.variant (graphic variety)
+    _LOCO_VARIANTS = ["locomotive", "locomotive_2", "locomotive_3", "locomotive_4"]
+    _WAGON_VARIANTS = ["wagon", "wagon_2", "wagon_3", "wagon_4"]
+
+    def _trains(self, screen, cam, sim, dt):
         length = balance.ENTITY_LEN
         for t in sim.trains.values():
+            v = getattr(t, "variant", 0) % 4
+            loco_name = self._LOCO_VARIANTS[v]
+            wagon_name = self._WAGON_VARIANTS[v]
             loco_pose = None
             for (wx, wy, ang, kind) in t.car_poses():
                 sx, sy = cam.world_to_screen(wx, wy)
                 if kind == "loco":
-                    loco_pose = (wx, wy)
+                    loco_pose = (wx, wy, ang)
                 if not self._on(cam, sx, sy):
                     continue
                 lp = max(2, int(length * cam.zoom))
                 wp = max(2, int(balance.ENTITY_WIDTH * cam.zoom))
-                sprite = "locomotive" if kind == "loco" else "wagon"
+                sprite = loco_name if kind == "loco" else wagon_name
                 base = pygame.transform.smoothscale(self.a.base[sprite], (lp, wp))
                 img = pygame.transform.rotate(base, -ang)
                 screen.blit(img, img.get_rect(center=(sx, sy)))
                 if t.stalled and kind == "loco":
                     pygame.draw.circle(screen, SIG_RED, (int(sx), int(sy)),
                                        max(3, int(0.5 * cam.zoom)), 2)
-            if loco_pose and cam.zoom >= 6:
-                if t.capacity:
-                    self._bar(screen, cam, loco_pose[0], loco_pose[1] - 2.2,
-                              t.cargo_total() / t.capacity, (230, 190, 90))
-                if t.hp < t.max_hp:
-                    self._bar(screen, cam, loco_pose[0], loco_pose[1] - 2.9,
-                              t.hp / t.max_hp, (228, 86, 70))
+            if loco_pose:
+                self._emit_steam(t, loco_pose, dt)
+                if cam.zoom >= 6:
+                    if t.capacity:
+                        self._bar(screen, cam, loco_pose[0], loco_pose[1] - 2.2,
+                                  t.cargo_total() / t.capacity, (230, 190, 90))
+                    if t.hp < t.max_hp:
+                        self._bar(screen, cam, loco_pose[0], loco_pose[1] - 2.9,
+                                  t.hp / t.max_hp, (228, 86, 70))
+
+    # ---- particles (steam puffs / rocket exhaust) -------------------------
+    def _emit_steam(self, t, loco_pose, dt):
+        """Spawn steam puffs behind a moving loco - denser when it's just pulling
+        away (low speed / high accel), like a steam engine building up."""
+        if dt <= 0 or t.stalled or t.state != "moving" or t.speed <= 0.05:
+            return
+        wx, wy, ang = loco_pose
+        frac_slow = max(0.0, 1.0 - t.speed / max(0.1, t.max_speed))
+        rate = 5.0 + 22.0 * frac_slow                      # puffs/sec
+        acc = self._smoke_accum.get(t.id, 0.0) + rate * dt
+        rad = math.radians(ang)
+        bx, by = wx - math.cos(rad) * 1.4, wy - math.sin(rad) * 1.4   # just behind the stack
+        while acc >= 1.0:
+            acc -= 1.0
+            self.smoke.append({
+                "x": bx + random.uniform(-0.3, 0.3),
+                "y": by + random.uniform(-0.3, 0.3),
+                "vx": random.uniform(-0.4, 0.4),
+                "vy": random.uniform(-1.4, -0.6),          # drift "up" (screen)
+                "age": 0.0, "life": random.uniform(0.8, 1.6),
+                "r0": 0.35, "r1": random.uniform(1.4, 2.4),
+                "col": (208, 210, 214),
+            })
+        self._smoke_accum[t.id] = acc
+        if len(self.smoke) > 600:
+            self.smoke = self.smoke[-500:]
+
+    def _particles(self, screen, cam, dt):
+        alive = []
+        for p in self.smoke:
+            p["age"] += dt
+            f = p["age"] / p["life"]
+            if f >= 1.0:
+                continue
+            p["x"] += p["vx"] * dt
+            p["y"] += p["vy"] * dt
+            sx, sy = cam.world_to_screen(p["x"], p["y"])
+            if self._on(cam, sx, sy):
+                rad = max(1, int((p["r0"] + (p["r1"] - p["r0"]) * f) * cam.zoom))
+                alpha = int(150 * (1.0 - f))
+                surf = pygame.Surface((rad * 2, rad * 2), pygame.SRCALPHA)
+                pygame.draw.circle(surf, (*p["col"], alpha), (rad, rad), rad)
+                screen.blit(surf, (int(sx) - rad, int(sy) - rad))
+            alive.append(p)
+        self.smoke = alive
+
+    def _ships(self, screen, cam, sim):
+        for sh in sim.ships:
+            frac = sh.climb / balance.SHIP_ASCEND_TILES
+            wx, wy = sh.jitter, -sh.climb
+            sx, sy = cam.world_to_screen(wx, wy)
+            scale = max(0.3, 1.25 - 0.85 * min(1.0, frac))      # shrink with "distance"
+            px = max(8, int(3.0 * scale * cam.zoom))
+            if not self._on(cam, sx, sy, pad=px + 40):
+                continue
+            # exhaust flame + plume just below the rocket
+            flame = max(3, int(0.9 * scale * cam.zoom))
+            for k, col in enumerate(((255, 150, 40), (255, 214, 120))):
+                fr = flame - k * max(1, flame // 3)
+                if fr > 0:
+                    pygame.draw.circle(screen, col, (int(sx), int(sy) + px // 2 + fr), fr)
+            for k in range(3):                                  # short smoke trail
+                rr = max(2, int((0.6 + 0.4 * k) * scale * cam.zoom))
+                a = max(0, 120 - k * 40)
+                puff = pygame.Surface((rr * 2, rr * 2), pygame.SRCALPHA)
+                pygame.draw.circle(puff, (200, 200, 205, a), (rr, rr), rr)
+                screen.blit(puff, (int(sx) - rr, int(sy) + px // 2 + flame + k * rr))
+            img = self.a.scaled("rocket", px)
+            if frac > 0.8:                                      # fade out near orbit
+                img = img.copy()
+                img.set_alpha(max(0, int(255 * (1.0 - (frac - 0.8) / 0.35))))
+            screen.blit(img, img.get_rect(center=(int(sx), int(sy))))
 
     def _robots(self, screen, cam, sim):
         for r in sim.robots.values():

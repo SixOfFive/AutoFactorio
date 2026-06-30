@@ -74,12 +74,14 @@ class App:
         self.running = True
         self.speed_idx = balance.GAME_SPEEDS.index(balance.DEFAULT_GAME_SPEED)
         self._new_game_armed_until = 0   # ms; New-game button needs a confirm click
+        self.frame_dt = 0.0              # effective sim dt this frame (for particles)
 
     # ---- loop -------------------------------------------------------------
     def run(self) -> None:
         try:
             while self.running:
                 dt = self.clock.tick(self.config.display.fps) / 1000.0
+                self.frame_dt = 0.0 if self.sim.paused else dt * self.sim.speed
                 self._events()
                 self._held_keys(dt)
                 self._apply_follow()
@@ -256,7 +258,7 @@ class App:
 
     # ---- draw -------------------------------------------------------------
     def _draw(self) -> None:
-        self.renderer.draw(self.screen, self.cam, self.sim, self.selected)
+        self.renderer.draw(self.screen, self.cam, self.sim, self.selected, self.frame_dt)
         armed = pygame.time.get_ticks() < self._new_game_armed_until
         self.hud.draw(self.screen, self.sim, self.director, self.show_detail, new_game_armed=armed)
         if self.show_minimap:

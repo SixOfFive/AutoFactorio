@@ -40,6 +40,18 @@ class ConstructionJob:
     activates_field: bool
 
 
+@dataclass
+class Ship:
+    """An orbital cargo rocket launched from the base: it ascends off-screen and,
+    on reaching orbit, trades its payload for science. Purely a visual + economic
+    flourish unlocked by Spaceflight research."""
+    id: int
+    reward: int
+    jitter: float = 0.0           # small x offset so stacked launches don't overlap
+    climb: float = 0.0            # tiles ascended so far
+    delivered: bool = False
+
+
 class Simulation:
     def __init__(self, config):
         self.config = config
@@ -54,6 +66,10 @@ class Simulation:
         self.fields: dict[int, MiningField] = {}
         self.trains: dict[int, Train] = {}
         self.jobs: dict[int, ConstructionJob] = {}
+        self.ships: list[Ship] = []
+        self._ship_timer = 0.0
+        self._ship_id = 0
+        self.ships_launched = 0
         self.kills = 0
         self._fid = 0
         self._tid = 0
@@ -121,6 +137,7 @@ class Simulation:
         self._reveal_along_trains()
         self._crush_animals()
         self._update_decommission()
+        self._update_ships(dt)
 
     # ---- robots / animals -------------------------------------------------
     @property
@@ -190,6 +207,30 @@ class Simulation:
         winner = min(requesters, key=lambda t: t.traffic_priority())
         net.junction_occupant = winner.id
         winner.holds_junction = True
+
+    # ---- orbital cargo ships ----------------------------------------------
+    def _update_ships(self, dt: float) -> None:
+        """Launch and fly the orbital trade rockets (unlocked by Spaceflight)."""
+        if self.research.spaceflight:
+            self._ship_timer += dt
+            if (self._ship_timer >= balance.ship_interval(self.research.level)
+                    and self.economy.have(balance.SHIP_COST)):
+                self._ship_timer = 0.0
+                self.economy.spend(balance.SHIP_COST)
+                sid = self._ship_id
+                self._ship_id += 1
+                self.ships_launched += 1
+                jitter = ((sid * 37) % 11 - 5) * 0.6
+                self.ships.append(Ship(sid, balance.ship_reward(self.research.level), jitter))
+                self.log(f"Cargo ship #{sid} launched to orbit (trade run).")
+        for sh in self.ships:
+            sh.climb += balance.SHIP_CLIMB_SPEED * dt
+            if sh.climb >= balance.SHIP_ASCEND_TILES and not sh.delivered:
+                sh.delivered = True
+                got = self.economy.add("science_pack", sh.reward)
+                self.log(f"Cargo ship #{sh.id} reached orbit; traded payload for {got} science.")
+        # keep delivered ships briefly so they can fade out past the top edge
+        self.ships = [s for s in self.ships if s.climb < balance.SHIP_ASCEND_TILES + 16]
 
     def _reveal_along_trains(self) -> None:
         """Running trains chart their route: each car clears fog around it, so the
@@ -603,4 +644,6 @@ class Simulation:
             "animals": len(self.animals.list),
             "kills": self.kills,
             "damaged_trains": sum(1 for t in self.trains.values() if t.hp < t.max_hp - 0.5),
+            "spaceflight": self.research.spaceflight,
+            "ships_launched": self.ships_launched,
         }

@@ -33,8 +33,9 @@ SPRITE_NAMES = [
     "assembler",
     "hq",
     "train_stop",
-    "locomotive",
-    "wagon",
+    "locomotive", "locomotive_2", "locomotive_3", "locomotive_4",
+    "wagon", "wagon_2", "wagon_3", "wagon_4",
+    "rocket",
     "scout",
     "animal",
     "tree", "rock",
@@ -58,7 +59,13 @@ PAL = {
     "brick": (150, 86, 70), "brick_d": (110, 60, 48),
     "steel": (120, 128, 140), "steel_l": (170, 178, 190),
     "loco_red": (188, 52, 48), "loco_red_d": (140, 34, 32),
+    "loco_blue": (52, 96, 188), "loco_blue_d": (34, 64, 140),
+    "loco_green": (60, 150, 72), "loco_green_d": (40, 110, 52),
+    "loco_dark": (74, 78, 90), "loco_dark_d": (46, 50, 60),
     "wagon_brown": (130, 96, 60), "wagon_brown_d": (96, 70, 44),
+    "wagon_steel": (122, 130, 142), "wagon_steel_d": (90, 96, 108),
+    "wagon_olive": (122, 122, 72), "wagon_olive_d": (90, 90, 50),
+    "wagon_gray": (110, 112, 120), "wagon_gray_d": (80, 82, 90),
     "scout_yellow": (236, 200, 72), "scout_yellow_d": (190, 158, 48),
     "glass": (150, 210, 235),
     "outline": (22, 24, 28),
@@ -218,15 +225,18 @@ def draw_train_stop(name) -> pygame.Surface:
     return s
 
 
-def draw_locomotive(name) -> pygame.Surface:
-    """Top-down, nose pointing +X (right). Renderer rotates to travel heading."""
+def draw_locomotive(name, body_c=None, body_d=None) -> pygame.Surface:
+    """Top-down, nose pointing +X (right). Renderer rotates to travel heading.
+    `body_c`/`body_d` recolour the hull for per-train variety."""
+    body_c = body_c or PAL["loco_red"]
+    body_d = body_d or PAL["loco_red_d"]
     s = _new()
     body = pygame.Rect(6, 16, TILE - 12, TILE - 32)
     pygame.draw.rect(s, PAL["outline"], body.inflate(2, 2), border_radius=10)
-    pygame.draw.rect(s, PAL["loco_red"], body, border_radius=10)
-    pygame.draw.rect(s, PAL["loco_red_d"], (body.x, body.centery, body.w, body.h // 2), border_radius=10)
+    pygame.draw.rect(s, body_c, body, border_radius=10)
+    pygame.draw.rect(s, body_d, (body.x, body.centery, body.w, body.h // 2), border_radius=10)
     # nose taper
-    pygame.draw.polygon(s, PAL["loco_red_d"], [(body.right, body.y + 4),
+    pygame.draw.polygon(s, body_d, [(body.right, body.y + 4),
                         (body.right + 6, TILE // 2), (body.right, body.bottom - 4)])
     # cabin window
     pygame.draw.rect(s, PAL["glass"], (body.x + 6, body.y + 6, 14, body.h - 12), border_radius=3)
@@ -235,15 +245,41 @@ def draw_locomotive(name) -> pygame.Surface:
     return s
 
 
-def draw_wagon(name) -> pygame.Surface:
+def draw_wagon(name, body_c=None, body_d=None) -> pygame.Surface:
+    body_c = body_c or PAL["wagon_brown"]
+    body_d = body_d or PAL["wagon_brown_d"]
     s = _new()
     body = pygame.Rect(4, 16, TILE - 8, TILE - 32)
     pygame.draw.rect(s, PAL["outline"], body.inflate(2, 2), border_radius=5)
-    pygame.draw.rect(s, PAL["wagon_brown"], body, border_radius=5)
+    pygame.draw.rect(s, body_c, body, border_radius=5)
     # ribs
     for x in range(body.x + 8, body.right - 4, 10):
-        pygame.draw.line(s, PAL["wagon_brown_d"], (x, body.y + 2), (x, body.bottom - 2), 2)
-    pygame.draw.rect(s, PAL["wagon_brown_d"], (body.x, body.y, body.w, 4))
+        pygame.draw.line(s, body_d, (x, body.y + 2), (x, body.bottom - 2), 2)
+    pygame.draw.rect(s, body_d, (body.x, body.y, body.w, 4))
+    return s
+
+
+def draw_rocket(name) -> pygame.Surface:
+    """A cargo rocket pointing UP (nose at top) - the renderer draws it ascending
+    from the base without rotating it."""
+    s = _new()
+    cx = TILE // 2
+    # body (tall capsule)
+    body = pygame.Rect(cx - 9, 16, 18, 36)
+    pygame.draw.rect(s, PAL["outline"], body.inflate(2, 2), border_radius=8)
+    pygame.draw.rect(s, PAL["steel_l"], body, border_radius=8)
+    pygame.draw.rect(s, PAL["steel"], (cx, body.y, body.w // 2, body.h), border_radius=8)
+    # nose cone
+    pygame.draw.polygon(s, PAL["outline"], [(cx, 4), (body.x - 1, body.y + 4), (body.right + 1, body.y + 4)])
+    pygame.draw.polygon(s, PAL["loco_red"], [(cx, 7), (body.x + 1, body.y + 3), (body.right - 1, body.y + 3)])
+    # window
+    pygame.draw.circle(s, PAL["glass"], (cx, body.y + 12), 4)
+    pygame.draw.circle(s, PAL["outline"], (cx, body.y + 12), 4, 1)
+    # fins
+    pygame.draw.polygon(s, PAL["loco_red_d"], [(body.x, body.bottom - 10), (body.x - 7, body.bottom + 2), (body.x, body.bottom)])
+    pygame.draw.polygon(s, PAL["loco_red_d"], [(body.right, body.bottom - 10), (body.right + 7, body.bottom + 2), (body.right, body.bottom)])
+    # engine bell
+    pygame.draw.rect(s, PAL["metal_d"], (cx - 6, body.bottom - 2, 12, 6), border_radius=2)
     return s
 
 
@@ -329,7 +365,14 @@ _DRAW = {
     "hq": draw_hq,
     "train_stop": draw_train_stop,
     "locomotive": draw_locomotive,
+    "locomotive_2": lambda n: draw_locomotive(n, PAL["loco_blue"], PAL["loco_blue_d"]),
+    "locomotive_3": lambda n: draw_locomotive(n, PAL["loco_green"], PAL["loco_green_d"]),
+    "locomotive_4": lambda n: draw_locomotive(n, PAL["loco_dark"], PAL["loco_dark_d"]),
     "wagon": draw_wagon,
+    "wagon_2": lambda n: draw_wagon(n, PAL["wagon_steel"], PAL["wagon_steel_d"]),
+    "wagon_3": lambda n: draw_wagon(n, PAL["wagon_olive"], PAL["wagon_olive_d"]),
+    "wagon_4": lambda n: draw_wagon(n, PAL["wagon_gray"], PAL["wagon_gray_d"]),
+    "rocket": draw_rocket,
     "scout": draw_scout,
     "animal": draw_animal,
     "tree": draw_tree,

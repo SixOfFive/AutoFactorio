@@ -27,6 +27,7 @@ class Train:
         self.id = tid
         self.legs = legs
         self.wagons = wagons
+        self.variant = tid % 4           # which loco/wagon sprite set to draw
         # per-train tuning (lifted by research); fall back to base balance numbers
         self.max_speed = research.train_speed if research else balance.TRAIN_MAX_SPEED
         self.accel = research.train_accel if research else balance.TRAIN_ACCEL
