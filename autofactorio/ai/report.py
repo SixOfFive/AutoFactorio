@@ -57,6 +57,10 @@ def build_report(sim) -> dict:
 
     s = sim.stats()
     flags = []
+    if any(eco.fill_fraction(o) >= 0.7 for o in ("iron_ore", "copper_ore", "coal", "stone")):
+        flags.append("ORE_BACKING_UP")          # smelting can't keep up -> build_furnace
+    if any(eco.fill_fraction(o) >= 0.7 for o in ("iron_plate", "copper_plate", "steel_plate")):
+        flags.append("PLATES_BACKING_UP")       # crafting can't keep up -> build_assembler
     if backing_up:
         flags.append("STORAGE_FULL")           # see storage_full[] for which items
     if any(f.patch.depleted for f in sim.fields.values()):

@@ -40,6 +40,9 @@ RECIPES = {
     "rail_signal":   {"in": {"electronic_circuit": 1, "iron_plate": 5},                            "out": {"rail_signal": 1},   "time": 0.5},
     "chain_signal":  {"in": {"electronic_circuit": 1, "iron_plate": 5},                            "out": {"chain_signal": 1},  "time": 0.5},
     "train_stop":    {"in": {"electronic_circuit": 5, "iron_plate": 6, "iron_stick": 6, "steel_plate": 3}, "out": {"train_stop": 1}, "time": 0.5},
+    # burner drill is COPPER-FREE (iron only) so expansion never hard-stalls on the
+    # copper chain - a cheap fallback miner the base can always craft to keep expanding
+    "burner_drill":  {"in": {"iron_plate": 3, "iron_gear": 2},                                     "out": {"burner_drill": 1}, "time": 1.0},
     "electric_drill":{"in": {"electronic_circuit": 3, "iron_gear": 5, "iron_plate": 10},           "out": {"electric_drill": 1},"time": 2.0},
     "stone_furnace": {"in": {"stone": 5},                                                          "out": {"stone_furnace": 1}, "time": 0.5},
     "assembler":     {"in": {"electronic_circuit": 3, "iron_gear": 5, "iron_plate": 9},            "out": {"assembler": 1},     "time": 0.5},
@@ -66,7 +69,8 @@ DISPLAY_NAME = {
 # ---------------------------------------------------------------------------
 # Mining / smelting rates
 # ---------------------------------------------------------------------------
-DRILL_RATE = {"burner": 0.8, "electric": 2.0}     # ore/sec per drill (arcade-tuned for pace)
+DRILL_RATE = {"burner": 2.0, "electric": 5.0}     # ore/sec per drill (arcade-tuned for a
+                                                   # fast, snowballing superpower economy)
 DEFAULT_FIELD_DRILLS = 4                           # drills auto-placed per new field
 DEFAULT_FIELD_FURNACES = 0                         # smelting happens at home, not the field
 
@@ -182,22 +186,25 @@ OCCUPANCY_PENALTY = 1000           # added to route cost for a locked block
 # first fields, plus seed materials - this avoids a bootstrap deadlock where a new
 # field needs a locomotive but a locomotive needs copper from a field you can't
 # yet build. The user explicitly asked to "start with enough materials".
+# Generous so the director can immediately claim a FLEET of fields and kickstart the
+# snowball (lots of ore in -> lots of materials out -> faster expansion), rather than
+# crawling out of a one-field bootstrap. Enough drills/locos/wagons for ~10 fields.
 STARTING_INVENTORY = {
-    "burner_drill": 16,
+    "burner_drill": 44,
     "electric_drill": 0,
     "stone_furnace": 16,
-    "coal": 600,
+    "coal": 800,
     "assembler": 4,
-    "train_stop": 10,
-    "rail": 250,
-    "rail_signal": 30,
+    "train_stop": 24,
+    "rail": 600,
+    "rail_signal": 60,
     "chain_signal": 12,
-    "locomotive": 4,
-    "cargo_wagon": 8,
-    "iron_plate": 300,
-    "copper_plate": 250,
-    "steel_plate": 100,
-    "stone": 200,
+    "locomotive": 12,
+    "cargo_wagon": 24,
+    "iron_plate": 400,
+    "copper_plate": 400,
+    "steel_plate": 150,
+    "stone": 300,
 }
 
 # Home production capacity the base starts with (auto-crafts toward targets below).
@@ -206,12 +213,16 @@ HOME_START = {
     "assemblers": 6,       # assemblers for the crafting chain
 }
 
-# The auto-crafter keeps roughly this much of each buildable in stock; the
-# director spends the surplus to expand. Tunes how "ready" the base feels.
+# The auto-crafter keeps roughly this much of each buildable in stock; the director
+# spends the surplus to expand. Targets are GENEROUS so the base always has a deep
+# bench of factories/drills/rolling-stock ready to deploy in BULK - the director is
+# meant to be an industrial superpower that expands fast and furious, not trickle out
+# one building at a time. (These are ceilings; actual stock ramps with throughput, so
+# the curve still starts slow and snowballs as more factories come online.)
 STOCK_TARGETS = {
-    "rail": 250, "rail_signal": 30, "chain_signal": 12,
-    "electric_drill": 8, "train_stop": 8, "assembler": 2,
-    "stone_furnace": 8, "locomotive": 3, "cargo_wagon": 6,
+    "rail": 600, "rail_signal": 60, "chain_signal": 16,
+    "burner_drill": 16, "electric_drill": 24, "train_stop": 16, "assembler": 16,
+    "stone_furnace": 30, "locomotive": 8, "cargo_wagon": 16,
     "science_pack": 120,    # accumulate research currency from surplus production
     "robot": 3,             # keep robots ready to deploy up to the research cap
     "solid_fuel": 250,      # convert surplus coal into denser train fuel...
@@ -237,10 +248,10 @@ STORAGE_CAP_START = {
     "solid_fuel": 400, "rocket_fuel": 120,
     # research currency
     "science_pack": 120,
-    # buildables
-    "rail": 400, "rail_signal": 60, "chain_signal": 30, "train_stop": 30,
-    "burner_drill": 30, "electric_drill": 30, "stone_furnace": 30, "assembler": 20,
-    "locomotive": 20, "cargo_wagon": 30, "robot": 10,
+    # buildables (generous caps so the deep deployable bench above can actually be held)
+    "rail": 800, "rail_signal": 100, "chain_signal": 40, "train_stop": 40,
+    "burner_drill": 30, "electric_drill": 50, "stone_furnace": 60, "assembler": 40,
+    "locomotive": 30, "cargo_wagon": 50, "robot": 10,
 }
 # Capacity ONE storage build adds to a single resource (its own location). Each
 # step is well under that resource's starting cap so capacity grows gradually
@@ -285,7 +296,8 @@ ORE_WEIGHTS = {"iron_ore": 0.42, "copper_ore": 0.24, "coal": 0.20, "stone": 0.14
 # ---------------------------------------------------------------------------
 DEFAULT_GAME_SPEED = 1.0
 GAME_SPEEDS = [0.5, 1.0, 2.0, 4.0, 8.0]
-DECISION_INTERVAL = 6.0            # seconds (sim time) between director decisions
+DECISION_INTERVAL = 4.0            # seconds (sim time) between director decisions - snappy
+                                   # so the empire expands fast and furious
 
 # ---------------------------------------------------------------------------
 # Robots (the explorer is robot #0; more are built up to the research cap)

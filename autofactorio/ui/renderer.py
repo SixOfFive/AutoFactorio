@@ -213,15 +213,24 @@ class Renderer:
 
     def _home(self, screen, cam, sim):
         self._blit(screen, cam, "hq", 0, 0, 4.5)
-        # ring of furnaces + assemblers representing the home factory
-        nf = min(sim.economy.furnaces, 10)
-        na = min(sim.economy.assemblers, 10)
-        for i in range(nf):
-            a = i / max(1, nf) * 2 * math.pi
-            self._blit(screen, cam, "smelter", math.cos(a) * 4.5, math.sin(a) * 4.5, 1.6)
-        for i in range(na):
-            a = i / max(1, na) * 2 * math.pi + 0.3
-            self._blit(screen, cam, "assembler", math.cos(a) * 6.8, math.sin(a) * 6.8, 1.6)
+        # concentric rings of furnaces + assemblers representing the home factory; the
+        # base visibly fills out as the director scales up (exact counts in the panel)
+        self._factory_rings(screen, cam, "smelter", sim.economy.furnaces,
+                            radii=(4.5, 9.0, 13.5), per_ring=12, phase=0.0)
+        self._factory_rings(screen, cam, "assembler", sim.economy.assemblers,
+                            radii=(6.8, 11.3, 15.8), per_ring=12, phase=0.3)
+
+    def _factory_rings(self, screen, cam, sprite, count, radii, per_ring, phase):
+        count = min(count, per_ring * len(radii))
+        placed = 0
+        for ri, r in enumerate(radii):
+            n = min(per_ring, count - placed)
+            if n <= 0:
+                break
+            for i in range(n):
+                a = i / per_ring * 2 * math.pi + phase + ri * 0.26
+                self._blit(screen, cam, sprite, math.cos(a) * r, math.sin(a) * r, 1.6)
+            placed += n
 
     # locomotive / wagon sprite sets, indexed by train.variant (graphic variety)
     _LOCO_VARIANTS = ["locomotive", "locomotive_2", "locomotive_3", "locomotive_4"]

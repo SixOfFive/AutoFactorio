@@ -16,6 +16,7 @@ import json
 import threading
 import time
 
+from .. import balance
 from .client import LLMClient, LLMError
 from .report import build_report
 from .schema import validate
@@ -59,14 +60,28 @@ Valid actions (use the exact "action" names and integer ids from the report):
                                               emergency fuel. Max set by Robotics research.
 - {"action":"wait","reason":"..."}            do nothing this turn.
 
-Priorities: abandon ONLY fields with "depleted":true (never scrap a productive field)
-to recover its train; never run out of coal (it fuels trains) - claim a coal patch if
-the NO_COAL_FIELD or LOW_COAL flag is set; secure iron early; when the STORAGE_FULL flag
-is set, build_storage for each resource named in "storage_full" so the economy keeps
-flowing; expand to affordable patches; research the next tech when affordable (it
-compounds); build a robot when
-the WILDLIFE_PRESSURE or DAMAGED_TRAINS flag is set and robots.can_build is true; and
-scale production. Keep 1-3 actions per turn. Output JSON only."""
+You are an industrial SUPERPOWER. Be aggressive: produce fast and furious and expand
+relentlessly. There is NO cap on factories, fields, or trains - more furnaces and
+assemblers process more, more fields and drills mine more, so always be scaling up.
+Do as MUCH as you can afford EVERY turn: emit MANY actions (typically 4-8), not one.
+Never "wait" if anything useful is affordable.
+
+Each turn, in priority order:
+1. SAFETY: abandon ONLY fields with "depleted":true (recovers their train). If
+   NO_COAL_FIELD/LOW_COAL, claim a coal patch (coal fuels trains - never run dry).
+   Secure iron early. If STORAGE_FULL, build_storage for EACH item in "storage_full".
+   Build a robot on WILDLIFE_PRESSURE/DAMAGED_TRAINS when robots.can_build.
+2. EXPAND HARD: claim EVERY patch with "affordable":true this turn (multiple
+   build_field actions), favoring ore types you have fewest of. Add a train
+   (add_train) to any field with "buffer_full":true. Add drills (expand_drills) to
+   your productive fields.
+3. SCALE PRODUCTION to match intake: if ORE_BACKING_UP, smelting is the bottleneck -
+   build_furnace (a handful, count ~4-6). If PLATES_BACKING_UP, crafting is -
+   build_assembler (count ~3-4). Keep adding as long as those flags persist so
+   processing races to keep up; both scale without limit as the empire grows.
+4. RESEARCH whenever research.next.affordable is true (it compounds - huge long-term).
+
+Output ONLY the JSON object, with as many actions as you can afford. JSON only."""
 
 
 class Director:
@@ -77,7 +92,7 @@ class Director:
         self.client = (LLMClient(url=config.llm.url, model=config.llm.model,
                                  timeout=config.llm.timeout_seconds)
                        if self.use_llm else None)
-        self.interval = config.llm.decision_interval_seconds or 6.0
+        self.interval = config.llm.decision_interval_seconds or balance.DECISION_INTERVAL
         self._busy = False
         self._lock = threading.Lock()
         self._result = None

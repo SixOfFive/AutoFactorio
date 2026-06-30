@@ -65,6 +65,7 @@ class Train:
         # previous leg's geometry so trailing cars keep flowing across the boundary
         self._prev_pts: list[tuple[float, float]] = []
         self._prev_cum: list[float] = []
+        self._prev_intervals: list[tuple[float, float, int]] = []
         self._prev_len = 0.0
         self.begin_leg(net, 0)
 
@@ -81,6 +82,7 @@ class Train:
         if self._pts:
             self._prev_pts = self._pts
             self._prev_cum = self._cum
+            self._prev_intervals = self._intervals
             self._prev_len = self.leg_len
         self.cur_leg = idx
         leg = self.legs[idx]
@@ -119,11 +121,15 @@ class Train:
         ji = _junction_interval(self._pts, self._cum, self.throat_center, self.throat_radius)
         self.junc_enter, self.junc_exit = ji if ji else (None, None)
 
-    def _block_at(self, dist: float) -> int | None:
-        for s, e, bid in self._intervals:
+    @staticmethod
+    def _block_in(dist: float, intervals) -> int | None:
+        for s, e, bid in intervals:
             if s <= dist <= e:
                 return bid
         return None
+
+    def _block_at(self, dist: float) -> int | None:
+        return self._block_in(dist, self._intervals)
 
     def _block_start(self, bid: int) -> float:
         for s, _, b in self._intervals:
@@ -132,9 +138,9 @@ class Train:
         return 0.0
 
     def _body_blocks(self) -> set[int]:
-        lo = max(0.0, self.head_s - balance.MAX_TRAIN_LEN)
+        lo = self.head_s - balance.MAX_TRAIN_LEN
         ids: set[int] = set()
-        d = lo
+        d = max(0.0, lo)
         while d < self.head_s:
             b = self._block_at(d)
             if b is not None:
@@ -143,6 +149,16 @@ class Train:
         b = self._block_at(self.head_s)
         if b is not None:
             ids.add(b)
+        # the tail can still trail onto the PREVIOUS leg (cars span the boundary just
+        # after departing a stop); reserve those blocks too, so a following train can't
+        # drive into our wagons across the leg boundary (a real collision otherwise).
+        if lo < 0 and self._prev_intervals and self._prev_len > 0:
+            d = max(0.0, self._prev_len + lo)
+            while d <= self._prev_len:
+                b = self._block_in(d, self._prev_intervals)
+                if b is not None:
+                    ids.add(b)
+                d += 1.0
         return ids
 
     # ---- movement ---------------------------------------------------------
@@ -150,10 +166,10 @@ class Train:
                         hard_obstacles=None, ignore_traffic=False) -> None:
         if self.state != "moving":
             return
-        if ignore_traffic:                 # anti-deadlock LAST RESORT: only the single most
-            obstacles = None               # stuck train, only when the WHOLE net is frozen,
-            hard_obstacles = None          # pushes through (incl. past cars) to break a
-                                           # pathological gridlock the interlock can't resolve
+        if ignore_traffic:                 # anti-deadlock: the most-stuck train ignores SOFT
+            obstacles = None               # yielding (priority/region waits) so it stops
+                                           # dithering - but it KEEPS the hard guard below, so
+                                           # it still never overlaps another car (no collisions)
         if self.fuel_seconds <= 0:
             self.speed = 0.0
             self.stalled = True
@@ -207,14 +223,19 @@ class Train:
                     break
 
         # hard collision guard: NEVER advance to within collision distance of any
-        # other train's car. This is unconditional (applies even to the mutex
-        # holder), so two trains can never physically overlap.
+        # other train's car. This is unconditional (applies even to the mutex holder),
+        # so two trains can never physically overlap. We check the new head position AND
+        # a point a collision-distance further on, so a train brakes BEFORE a graze when
+        # another is converging on a crossing/merge (otherwise a fast same-tick approach
+        # could close the gap before either yields).
         near = hard_obstacles if hard_obstacles is not None else obstacles
         if near and target > self.head_s:
-            hx, hy, _ = _point_at(self._pts, self._cum, target)
             cd2 = balance.TRAIN_COLLISION_DIST ** 2
+            look = min(self.leg_len, target + balance.TRAIN_COLLISION_DIST)
+            hx, hy, _ = _point_at(self._pts, self._cum, target)
+            fx, fy, _ = _point_at(self._pts, self._cum, look)
             for ox, oy in near:
-                if (hx - ox) ** 2 + (hy - oy) ** 2 < cd2:
+                if (hx - ox) ** 2 + (hy - oy) ** 2 < cd2 or (fx - ox) ** 2 + (fy - oy) ** 2 < cd2:
                     target = self.head_s
                     self.speed = 0.0
                     self.waiting_for_train = True

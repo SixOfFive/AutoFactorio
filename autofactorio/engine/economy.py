@@ -26,7 +26,9 @@ _SMELT_ORDER = ["iron_plate", "copper_plate", "steel_plate"]
 # Craft toward stock in this order; intermediates are made on demand.
 _BUILD_ORDER = [
     "stone_furnace", "rail", "rail_signal", "chain_signal",
-    "train_stop", "electric_drill", "robot",   # robot kept ahead of the steel-hungry
+    "train_stop", "burner_drill", "electric_drill", "robot",  # burner drill is the
+                                               # copper-free fallback miner for expansion;
+                                               # robot kept ahead of the steel-hungry
     "assembler", "cargo_wagon", "locomotive",  # rolling stock so it actually gets made
     "solid_fuel", "rocket_fuel",  # convert surplus coal into denser train fuel
     "science_pack",     # made from surplus circuits/plates; fuels research

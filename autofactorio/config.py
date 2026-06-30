@@ -36,7 +36,7 @@ class LLMConfig:
     model: str = "qwen3:4b"
     enabled: bool = True
     timeout_seconds: float = 60.0
-    decision_interval_seconds: float = 6.0
+    decision_interval_seconds: float = 4.0
 
 
 @dataclass
