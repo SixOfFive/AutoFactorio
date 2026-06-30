@@ -139,11 +139,35 @@ UNJAM_SECONDS = 4.0               # a train held this long by traffic gets to pu
 # ---------------------------------------------------------------------------
 # Rail network
 # ---------------------------------------------------------------------------
-HOME_RING = 14                     # each loop's home turnaround sits this far from the HQ,
-                                   # out in its field's direction (loops fan out instead of
-                                   # converging at 0,0 - the main collision fix)
-HOME_RING_BAY = 7                  # extra ring radius per EXTRA loop to the same field, so
-                                   # duplicate loops (add_train) don't coincide
+HOME_RING = 14                     # (legacy) each old dedicated loop's home turnaround radius
+HOME_RING_BAY = 7                  # (legacy) extra ring per duplicate loop
+
+# ---------------------------------------------------------------------------
+# Shared-track TRUNK network (replaces one-dedicated-loop-per-field)
+# ---------------------------------------------------------------------------
+# Fields no longer each get a private loop that converges on the home ring (which
+# gridlocked when several fields lay in the same direction). Instead fields are
+# grouped into angular SECTORS; each sector has ONE shared double-track trunk - a
+# home balloon-loop + a short outbound/inbound stem - that every train on that
+# sector shares. Trains FOLLOW each other along the common stem (one-train-per-
+# block), then peel off onto a per-field BRANCH to their own patch and merge back.
+# Because all of a sector's loops share the SAME home turnaround + unload, the
+# number of distinct home crossings is bounded by the sector count (<= 360/merge),
+# not by the field count -> clustered fields can't pile up at the base anymore, and
+# trains visibly intermingle / travel to different areas along the same track.
+TRUNK_MERGE_DEG = 30               # a new field joins an existing trunk if within this
+                                   # many degrees of its bearing; else a new trunk is made.
+                                   # Trunks therefore sit >= this far apart so their home
+                                   # throats clear, while same-direction fields share a trunk.
+TRUNK_HOME_RING = 20               # radius of a trunk's home balloon-loop (unload sits here).
+                                   # Kept WELL INSIDE the nearest patches (PATCH_MIN_RING) so
+                                   # every loop runs outward and is longer than a train (a
+                                   # train parked at its field must clear the home throat).
+TRUNK_STEM_LEN = 14                # spine segment step length
+TRUNK_MAX_FIELDS = 3               # cap fields sharing one trunk's single home throat;
+                                   # an extra in-direction field starts a new trunk so no
+                                   # one throat is overloaded (only bites pathological
+                                   # many-fields-one-direction clusters; spread builds never)
 RAIL_GRID = 2                      # rail nodes snap to even tile coords on straights
 LANE_OFFSET = 10                   # gap between the two one-way lanes (tiles); also the
                                    # diameter of the U-turn loops, so trains never turn sharp

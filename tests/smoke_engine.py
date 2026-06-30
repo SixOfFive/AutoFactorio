@@ -29,10 +29,17 @@ def main() -> int:
     ok, msg = sim.build_field(iron.id)
     print("build_field:", ok, msg)
     assert ok, msg
-    assert sim.trains, "no train created"
+
+    # build_field only PLANS the field; a robot must lay the track before the train is
+    # dispatched (deferred construction job). Let it build, then run the loop.
+    dt = 1 / 60
+    for _ in range(int(60 / dt)):
+        if sim.trains:
+            break
+        sim.tick(dt)
+    assert sim.trains, "no train created after the robot laid the track"
 
     # run ~3 minutes of sim time at dt=1/60
-    dt = 1 / 60
     for _ in range(int(180 / dt)):
         sim.tick(dt)
 

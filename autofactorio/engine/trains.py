@@ -46,9 +46,14 @@ class Train:
         self.waiting_for_train = False   # yielding to another train ahead
         self.recall = False              # field decommissioned: return home and store
         self.locked: set[int] = set()
-        self.holds_junction = False      # currently granted the home-junction mutex
+        self.holds_junction = False      # currently granted this train's home-throat mutex
         self.blocked_time = 0.0          # seconds held still by traffic (anti-deadlock)
-        # arc-length span of this leg that lies inside the home junction (or None)
+        # this train's home throat (its trunk's turnaround) - set by the Simulation
+        # once the train is tied to a field/trunk; falls back to the legacy origin one
+        self.throat_center: tuple[float, float] | None = None
+        self.throat_radius: float = 0.0
+        self.throat_trunk: int = -1
+        # arc-length span of this leg that lies inside the home throat (or None)
         self.junc_enter: float | None = None
         self.junc_exit: float | None = None
         # current-leg cached geometry
@@ -99,9 +104,19 @@ class Train:
         self.head_s = 0.0
         self.speed = 0.0
         self.state = "moving"
-        # find where (if at all) this leg crosses the home junction throat
-        ji = _junction_interval(self._pts, self._cum,
-                                net.junction_center, net.junction_radius)
+        # find where (if at all) this leg crosses this train's home throat
+        center = self.throat_center if self.throat_center is not None else net.junction_center
+        radius = self.throat_radius if self.throat_center is not None else net.junction_radius
+        ji = _junction_interval(self._pts, self._cum, center, radius)
+        self.junc_enter, self.junc_exit = ji if ji else (None, None)
+
+    def set_throat(self, center, radius, trunk_id: int, net: RailNetwork) -> None:
+        """Bind this train to its trunk's home throat and recompute where the current
+        leg crosses it (called when the train is created/loaded for a field)."""
+        self.throat_center = (float(center[0]), float(center[1]))
+        self.throat_radius = float(radius)
+        self.throat_trunk = trunk_id
+        ji = _junction_interval(self._pts, self._cum, self.throat_center, self.throat_radius)
         self.junc_enter, self.junc_exit = ji if ji else (None, None)
 
     def _block_at(self, dist: float) -> int | None:
@@ -135,9 +150,10 @@ class Train:
                         hard_obstacles=None, ignore_traffic=False) -> None:
         if self.state != "moving":
             return
-        if ignore_traffic:                 # anti-deadlock: push through other traffic
-            obstacles = None
-            hard_obstacles = None
+        if ignore_traffic:                 # anti-deadlock LAST RESORT: only the single most
+            obstacles = None               # stuck train, only when the WHOLE net is frozen,
+            hard_obstacles = None          # pushes through (incl. past cars) to break a
+                                           # pathological gridlock the interlock can't resolve
         if self.fuel_seconds <= 0:
             self.speed = 0.0
             self.stalled = True
@@ -255,9 +271,14 @@ class Train:
         return (cls, self.id)
 
     def _in_region(self, net: RailNetwork) -> bool:
-        """True if any of this train's cars is inside the home-cluster region."""
+        """True if any of this train's cars is inside its home throat region."""
+        if self.throat_center is None:
+            cx, cy, r = net.junction_center[0], net.junction_center[1], net.junction_radius
+        else:
+            cx, cy, r = self.throat_center[0], self.throat_center[1], self.throat_radius
+        r2 = r * r
         for (x, y, _a, _k) in self.car_poses():
-            if net.in_junction(x, y):
+            if (x - cx) ** 2 + (y - cy) ** 2 <= r2:
                 return True
         return False
 

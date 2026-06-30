@@ -403,6 +403,9 @@ def test_robot_refuels_stalled_train():
     iron = next(p for p in sim.world.discovered_patches() if p.ore == "iron_ore")
     _build_active(sim, iron.id)
     t = next(iter(sim.trains.values()))
+    t.begin_leg(sim.net, 1)                 # send it out onto the return leg, mid-track
+    t.head_s = t.leg_len * 0.5
+    t.state = "moving"
     sim.economy.inv["coal"] = 500          # base has fuel to deliver
     t.fuel_seconds = 0.0                    # strand it
     sim.tick(1 / 60)
@@ -503,7 +506,9 @@ def test_train_cars_stay_connected_across_legs():
     iron = next(p for p in sim.world.discovered_patches() if p.ore == "iron_ore")
     _build_active(sim, iron.id)
     t = next(iter(sim.trains.values()))
-    # finish the current leg and depart onto the next one
+    # run to the end of the return leg, then depart onto the next (home->out) leg, so
+    # the wagons must trail back across the home boundary instead of bunching
+    t.begin_leg(sim.net, 1)
     t.head_s = t.leg_len
     t.depart(sim.net)
     assert t.head_s == 0.0
@@ -544,6 +549,8 @@ def test_train_waits_for_obstacle_ahead():
     iron = next(p for p in sim.world.discovered_patches() if p.ore == "iron_ore")
     _build_active(sim, iron.id)
     t = next(iter(sim.trains.values()))
+    t.begin_leg(sim.net, 1)                 # mid return leg so it has room to advance
+    t.head_s = t.leg_len * 0.4
     t.state = "moving"
     t.fuel_seconds = 100.0
     hx, hy, _, _ = t.car_poses()[0]
@@ -691,6 +698,85 @@ def test_many_loops_keep_flowing_without_permanent_jam():
                         overlaps += 1
     assert sim.delivered_total > mid + 1000, "network stopped delivering (permanent jam)"
     assert overlaps == 0, f"trains overlapped {overlaps} times"
+
+
+def test_collinear_fields_share_a_trunk_and_dont_jam():
+    """Fields in the SAME direction must SHARE a trunk's main line (a train for the far
+    field follows the near field's train down the common spine) instead of each piling a
+    private loop onto the home ring - which used to gridlock when several fields lay one
+    way. Here two pairs of fields, in two well-separated directions, each pair sharing a
+    trunk: the network keeps flowing and never overlaps. (Storage + reserves are given
+    headroom so this isolates TRAFFIC from the storage-backpressure / mining mechanics.)"""
+    import math
+    sim = Simulation(Config())
+    sim.world.explored[:] = 1
+    for p in sim.world.patches:
+        p.discovered = True
+    chosen = []
+    for lo, hi in ((0, 28), (60, 110)):               # two directions, >TRUNK_MERGE_DEG apart
+        picked = 0
+        for p in sorted(sim.world.claimable_patches(), key=lambda q: math.hypot(q.cx, q.cy)):
+            if p in chosen:
+                continue
+            a = math.degrees(math.atan2(p.cy, p.cx))
+            if lo <= a <= hi:
+                chosen.append(p)
+                picked += 1
+            if picked >= 2:
+                break
+    assert len(chosen) >= 3, "seed lacks patches in the two test directions"
+    for p in chosen:
+        for k in ("rail", "rail_signal", "chain_signal", "train_stop", "locomotive",
+                  "cargo_wagon", "electric_drill", "iron_plate", "steel_plate"):
+            sim.economy.inv[k] = 1_000_000
+        ok, _ = sim.build_field(p.id)
+        assert ok
+    for item in sim.economy.caps:                     # plenty of storage: isolate traffic
+        sim.economy.caps[item] = 10_000_000
+    _settle(sim, max_s=180)
+    # real sharing: fewer trunks than fields, and at least one trunk serves >= 2 fields
+    assert len(sim.net.trunks) < len(sim.fields), "collinear fields did not share track"
+    assert any(len(tk.field_ids) >= 2 for tk in sim.net.trunks.values())
+    for f in sim.fields.values():                     # deep reserves: isolate traffic, not mining
+        f.patch.reserve = f.patch.max_reserve = 10_000_000
+    dt = 1 / 60
+    for _ in range(int(60 / dt)):                 # warm up
+        sim.tick(dt)
+    mid = sim.delivered_total
+    overlaps = 0
+    thr = (balance.ENTITY_WIDTH * 0.9) ** 2
+    for step in range(int(120 / dt)):
+        sim.tick(dt)
+        if step % 5 == 0:
+            poses = [t.car_poses() for t in sim.trains.values()]
+            for i in range(len(poses)):
+                for j in range(i + 1, len(poses)):
+                    if any((ax - bx) ** 2 + (ay - by) ** 2 < thr
+                           for (ax, ay, _a, _k) in poses[i] for (bx, by, _b, _l) in poses[j]):
+                        overlaps += 1
+    assert sim.delivered_total > mid + 500, "shared-track network stopped delivering (jam)"
+    assert overlaps == 0, f"trains on shared track overlapped {overlaps} times"
+    assert sim.stats()["stalled_trains"] == 0
+
+
+def test_add_train_uses_shared_track_no_new_rail():
+    """A second train for a field runs on its EXISTING branch (shared track), so no
+    new rail is laid - it just follows the first train around the loop."""
+    sim = Simulation(Config())
+    iron = next(p for p in sim.world.discovered_patches() if p.ore == "iron_ore")
+    _build_active(sim, iron.id)
+    fid = next(iter(sim.fields))
+    edges_before = len(sim.net.edges)
+    trains_before = len(sim.trains)
+    sim.economy.inv["locomotive"] = 5
+    sim.economy.inv["cargo_wagon"] = 20
+    ok, _ = sim.add_train(fid)
+    assert ok
+    assert len(sim.trains) == trains_before + 1
+    assert len(sim.net.edges) == edges_before        # reused existing track, no new rail
+    # the two trains share the field's trunk throat
+    throats = {t.throat_trunk for t in sim.trains.values()}
+    assert len(throats) == 1 and -1 not in throats
 
 
 def test_signal_aspect_goes_red_when_block_occupied():

@@ -62,6 +62,28 @@ class Station:
     reserved_by: int | None = None
 
 
+@dataclass
+class Trunk:
+    """A shared double-track MAIN LINE serving one angular sector. Its home end is a
+    balloon-loop (with the one shared unload station) at TRUNK_HOME_RING; from there
+    a straight radial spine runs outward (out_seq) and back (in_seq). Each member
+    field attaches a short SIDING at its own radius (nearest spine node), so trains
+    share the long spine (one-train-per-block => they follow each other and travel to
+    different fields along the same track) while only the short sidings are private.
+    The spine is straight, so it can be APPENDED to (extended outward) for a farther
+    field without disturbing existing edge ids / legs."""
+    id: int
+    bearing: float
+    home_edges: list[int]                    # balloon loop: unload(A_in) -> A_out
+    out_nodes: list[int]                     # spine out node ids, A_out (inner) -> outer
+    out_seq: list[int]                       # edge i connects out_nodes[i] -> out_nodes[i+1]
+    in_nodes: list[int]                      # spine in node ids, outer -> A_in (inner, last)
+    in_seq: list[int]                        # edge i connects in_nodes[i] -> in_nodes[i+1]
+    unload_id: int                           # the one shared home unload station
+    max_r: float = 0.0                       # current outer radius the spine reaches
+    field_ids: list[int] = field(default_factory=list)
+
+
 class RailNetwork:
     def __init__(self) -> None:
         self.nodes: dict[int, tuple[int, int]] = {}
@@ -71,26 +93,38 @@ class RailNetwork:
         self.blocks: dict[int, Block] = {}
         self.signals: dict[int, Signal] = {}
         self.stations: dict[int, Station] = {}
+        self.trunks: dict[int, Trunk] = {}      # shared-track corridors, by sector
         self._nid = 0
         self._eid = 0
         self._bid = 0
         self._sid = 0
-        # home junction interlock: all loops cross at the origin, so the throat is
-        # a single mutex - at most one train inside at a time (see Simulation).
+        self._tkid = 0
+        # legacy single-junction fields (kept for save compat / old code paths)
         self.junction_center: tuple[float, float] = (0.0, 0.0)
         self.junction_radius: float = balance.JUNCTION_RADIUS
         self.junction_occupant: int | None = None
+        # per-trunk home-throat interlock: each trunk's turnaround (balloon) is too
+        # small for two trains, so it's a mutex - at most one train through it at a
+        # time; others queue on the shared spine (see Simulation._arbitrate_junction).
+        self.throat_occupant: dict[int, int | None] = {}    # trunk_id -> train id
 
-    def in_junction(self, x: float, y: float, slack: float = 0.0) -> bool:
-        cx, cy = self.junction_center
-        r = self.junction_radius + slack
-        return (x - cx) ** 2 + (y - cy) ** 2 <= r * r
+    def trunk_throat(self, tk: "Trunk") -> tuple[tuple[float, float], float]:
+        """Geometry of a trunk's home throat: a circle covering its balloon turnaround
+        (where in-lane, out-lane and balloon meet) that only one train may be in."""
+        off = balance.LANE_OFFSET
+        r0 = balance.TRUNK_HOME_RING
+        ux, uy = math.cos(tk.bearing), math.sin(tk.bearing)
+        px, py = -uy, ux
+        cx = ux * (r0 - off * 0.25) + px * (off * 0.5)
+        cy = uy * (r0 - off * 0.25) + py * (off * 0.5)
+        return (cx, cy), off * 0.55
 
     def update_signals(self) -> None:
         """Refresh each signal's red/green aspect for rendering: a signal shows red
-        when the block just past it is held by a train, and a junction-throat chain
-        signal shows red while the home junction is reserved."""
-        jr = self.junction_radius + balance.LANE_OFFSET + 2.0
+        when the block just past it is held by a train, and a chain (throat) signal
+        shows red while its trunk's home throat is reserved."""
+        occupied_throats = [self.trunk_throat(tk) for tk in self.trunks.values()
+                            if self.throat_occupant.get(tk.id) is not None]
         for nid, sig in self.signals.items():
             red = False
             for eid in self.out_edges.get(nid, []):
@@ -101,9 +135,12 @@ class RailNetwork:
                 if blk is not None and blk.occupant is not None:
                     red = True
                     break
-            if (sig.kind == "chain" and self.junction_occupant is not None
-                    and (sig.pos[0] ** 2 + sig.pos[1] ** 2) <= jr * jr):
-                red = True
+            if sig.kind == "chain" and not red:
+                for (cx, cy), rad in occupied_throats:
+                    rr = rad + balance.LANE_OFFSET
+                    if (sig.pos[0] - cx) ** 2 + (sig.pos[1] - cy) ** 2 <= rr * rr:
+                        red = True
+                        break
             sig.aspect = "red" if red else "green"
 
     # ---- primitives -------------------------------------------------------
@@ -199,55 +236,186 @@ class RailNetwork:
             kind = "chain" if (i == 0 and chain_at_start) else "rail"
             self.signals.setdefault(e.a, Signal(e.a, kind, self.node_pos(e.a)))
 
-    def build_link(self, home: tuple[int, int], field_pt: tuple[int, int],
-                   home_anchor: tuple[float, float] | None = None):
-        """Build one continuous, smooth, collision-free loop to a field.
+    # ---- shared-track trunk network ---------------------------------------
+    def find_or_make_trunk(self, bearing: float, reach: float) -> tuple[Trunk, bool]:
+        """Return the trunk serving this bearing's sector (building a new one, reaching
+        out to `reach` tiles, if none is within TRUNK_MERGE_DEG). 2nd value: created?"""
+        best = None
+        best_d = math.radians(balance.TRUNK_MERGE_DEG)
+        for tk in self.trunks.values():
+            if len(tk.field_ids) >= balance.TRUNK_MAX_FIELDS:
+                continue                              # full: don't overload its one throat
+            d = abs((bearing - tk.bearing + math.pi) % (2 * math.pi) - math.pi)
+            if d <= best_d:
+                best_d = d
+                best = tk
+        if best is not None:
+            return best, False
+        return self.build_trunk(bearing, reach), True
 
-        The loop has two one-way lanes joined by wide U-turns at each end, with all
-        corners rounded so trains never turn sharp or snap direction. Two legs:
-          A: home -> (home U-turn) -> out lane -> field   (ends at the LOAD stop)
-          B: field -> (field U-turn) -> return lane -> home (ends at the UNLOAD stop)
-        Because leg B starts exactly where leg A ends (and vice-versa), motion is
-        continuous - no teleport between legs.
+    def _spine_segment(self, a_pt, b_pt) -> tuple[int, int]:
+        """One straight signalled spine edge a->b (its own block). Returns (edge, b_node)."""
+        an = self.add_node(*a_pt)
+        bn = self.add_node(*b_pt)
+        eid = self._add_edge_poly(an, bn, [a_pt, b_pt])
+        blk = self._new_block()
+        blk.edge_ids.append(eid)
+        blk.length = self.edges[eid].length
+        self.edges[eid].block_id = blk.id
+        self.signals.setdefault(an, Signal(an, "rail", (float(a_pt[0]), float(a_pt[1]))))
+        return eid, bn
 
-        Returns (legA_edges, legB_edges, load_station, unload_station).
-        """
+    def build_trunk(self, bearing: float, reach: float) -> Trunk:
+        """Lay one sector's shared main line: a home balloon-loop (with the unload
+        station) at TRUNK_HOME_RING, then a straight radial spine out to `reach`."""
         g = balance.RAIL_GRID
         off = balance.LANE_OFFSET
+        ux, uy = math.cos(bearing), math.sin(bearing)
+        px, py = -uy, ux                                  # perpendicular (lane offset dir)
+        r0 = balance.TRUNK_HOME_RING
+        a_out = (_snap(ux * r0, g), _snap(uy * r0, g))                       # outbound home end
+        a_in = (_snap(ux * r0 + px * off, g), _snap(uy * r0 + py * off, g))  # inbound home end
+        home_uturn = _arc(a_in, a_out, (-ux, -uy))        # balloon behind home: in-lane -> out-lane
+        home_e = self._polyline_to_edges(home_uturn)
+        self._signalize(home_e, chain_at_start=True)
 
-        # The loop's home end is anchored on a RING around the HQ at a DISTINCT slot
-        # (chosen by the Simulation so no two loops share home space - the fix for
-        # trains piling up / colliding at the centre). Fall back to the field's own
-        # direction if no anchor is supplied.
-        if home_anchor is None:
-            d0 = math.hypot(field_pt[0] - home[0], field_pt[1] - home[1]) or 1.0
-            home_anchor = (home[0] + (field_pt[0] - home[0]) / d0 * balance.HOME_RING,
-                           home[1] + (field_pt[1] - home[1]) / d0 * balance.HOME_RING)
-        home_a = (_snap(home_anchor[0], g), _snap(home_anchor[1], g))
-        field_a = (_snap(field_pt[0], g), _snap(field_pt[1], g))
-        # lane direction runs from the home anchor out to the field
-        dx, dy = field_a[0] - home_a[0], field_a[1] - home_a[1]
-        d = math.hypot(dx, dy) or 1.0
-        ux, uy = dx / d, dy / d                     # unit home_anchor->field
-        px, py = -uy, ux                            # perpendicular unit
-        home_b = (_snap(home_a[0] + px * off, g), _snap(home_a[1] + py * off, g))
-        field_b = (_snap(field_a[0] + px * off, g), _snap(field_a[1] + py * off, g))
+        tk = Trunk(self._tkid, bearing, home_e, [self.add_node(*a_out)], [],
+                   [], [], -1, float(r0))
+        self.trunks[tk.id] = tk
+        self._tkid += 1
+        # the spine runs from r0 (A_out / A_in) outward to `reach`; the inbound spine's
+        # innermost node lands exactly on A_in (the home balloon's open end).
+        self._extend_spine(tk, reach)
+        # the unload stop sits on the inbound spine ONE block out from the balloon (NOT
+        # in the home throat), so a returning train can always pull in to unload without
+        # contending for the turnaround interlock - only DEPARTING trains queue for it.
+        unload_node = tk.in_nodes[-2] if len(tk.in_nodes) >= 2 else tk.in_nodes[-1]
+        unload = self._add_station("unload", self.nodes[unload_node], kind="unload", is_home=True)
+        tk.unload_id = unload.id
+        return tk
 
-        out_poly = _round_corners(self._lattice_path(home_a, field_a), balance.CURVE_RADIUS)
-        ret_poly = _round_corners(self._lattice_path(field_b, home_b), balance.CURVE_RADIUS)
-        field_uturn = _arc(field_a, field_b, (ux, uy))      # bulge beyond the field
-        home_uturn = _arc(home_b, home_a, (-ux, -uy))       # bulge behind home
+    def _extend_spine(self, tk: Trunk, reach: float) -> None:
+        """Append straight spine segments outward (and matching inbound segments) until
+        the spine reaches `reach`. Append-only: never disturbs existing edge ids."""
+        g = balance.RAIL_GRID
+        off = balance.LANE_OFFSET
+        ux, uy = math.cos(tk.bearing), math.sin(tk.bearing)
+        px, py = -uy, ux
+        step = float(balance.SIGNAL_SPACING)
+        r = tk.max_r
+        new_in_segments = []   # (edge, a_node, b_node) built inner->outer this batch
+        while r < reach - 1e-6:
+            r2 = min(reach, r + step)
+            out_a = (_snap(ux * r, g), _snap(uy * r, g))
+            out_b = (_snap(ux * r2, g), _snap(uy * r2, g))
+            eid, bnode = self._spine_segment(out_a, out_b)
+            tk.out_seq.append(eid)
+            tk.out_nodes.append(bnode)
+            # inbound runs the OTHER way (r2 -> r) on the offset lane
+            in_a = (_snap(ux * r2 + px * off, g), _snap(uy * r2 + py * off, g))
+            in_b = (_snap(ux * r + px * off, g), _snap(uy * r + py * off, g))
+            ie, ib = self._spine_segment(in_a, in_b)
+            new_in_segments.append((ie, self.add_node(*in_a), ib))
+            r = r2
+        # inbound spine is ordered OUTER -> inner (A_in last). This batch was built
+        # inner->outer, so reverse it, and prepend ahead of any existing (more inner)
+        # inbound spine so the full sequence stays outer->inner and contiguous.
+        if new_in_segments:
+            rev = list(reversed(new_in_segments))           # outer-most first
+            seq = [e for (e, _a, _b) in rev]
+            nodes = [rev[0][1]] + [b for (_e, _a, b) in rev]  # outer node, then each inner b
+            if tk.in_nodes and nodes[-1] == tk.in_nodes[0]:   # join coincides -> drop dup
+                nodes = nodes[:-1]
+            tk.in_seq[:0] = seq
+            tk.in_nodes[:0] = nodes
+        tk.max_r = max(tk.max_r, reach)
 
-        legA_poly = home_uturn[:-1] + out_poly              # home_b -> home_a -> field_a
-        legB_poly = field_uturn[:-1] + ret_poly             # field_a -> field_b -> home_b
-        legA = self._polyline_to_edges(legA_poly)
-        legB = self._polyline_to_edges(legB_poly)
-        self._signalize(legA, chain_at_start=True)
-        self._signalize(legB, chain_at_start=True)
+    def attach_field(self, bearing: float, field_pt: tuple[int, int]):
+        """Attach a field to its sector's main line via a short SIDING at the field's
+        own radius. Returns (legA_edges, legB_edges, branch_edges, new_edges, load,
+        unload, trunk, created): legA/legB are the full loop (shared spine slice +
+        this field's siding); branch_edges are the field-owned siding to reclaim;
+        new_edges are the not-yet-built edges a robot must lay."""
+        g = balance.RAIL_GRID
+        off = balance.LANE_OFFSET
+        rP = math.hypot(field_pt[0], field_pt[1])
+        before = set(self.edges.keys())                    # snapshot before any new track
+        tk, created = self.find_or_make_trunk(bearing, rP + balance.TRUNK_STEM_LEN)
+        if rP + 2.0 > tk.max_r:                            # ensure the spine reaches the field
+            self._extend_spine(tk, rP + balance.TRUNK_STEM_LEN)
+        spine_new = [e for e in self.edges.keys() if e not in before]  # new spine (if created/extended)
 
-        load = self._add_station("load", field_a, kind="load")
-        unload = self._add_station("unload", home_b, kind="unload", is_home=True)
-        return legA, legB, load, unload
+        # nearest spine nodes (out + in) to the field's radius. The inbound attach is
+        # clamped to be no closer than the unload node (idx_unload), so a returning train
+        # always routes DOWN the spine to the unload stop (never inside the throat).
+        idx_unload = max(0, len(tk.in_nodes) - 2)
+        k_out = self._nearest_spine(tk.out_nodes, field_pt)
+        k_in = min(self._nearest_spine(tk.in_nodes, field_pt), idx_unload)
+        out_node = tk.out_nodes[k_out]
+        in_node = tk.in_nodes[k_in]
+        out_pos = self.nodes[out_node]
+        in_pos = self.nodes[in_node]
+
+        ux, uy = math.cos(tk.bearing), math.sin(tk.bearing)
+        px, py = -uy, ux
+        fa = (_snap(field_pt[0], g), _snap(field_pt[1], g))                       # load point
+        fb = (_snap(field_pt[0] + px * off, g), _snap(field_pt[1] + py * off, g))  # U-turn end
+        bdx, bdy = fa[0] - out_pos[0], fa[1] - out_pos[1]
+        bd = math.hypot(bdx, bdy) or 1.0
+        bulge = (bdx / bd, bdy / bd)
+        sid_out_poly = _round_corners(self._lattice_path(out_pos, fa), balance.CURVE_RADIUS)
+        sid_in_poly = _round_corners(self._lattice_path(fb, in_pos), balance.CURVE_RADIUS)
+        field_uturn = _arc(fa, fb, bulge)
+        sid_out = self._polyline_to_edges(sid_out_poly)            # spine -> fa (load)
+        sid_in = self._polyline_to_edges(field_uturn[:-1] + sid_in_poly)   # fa -> fb -> spine
+        self._signalize(sid_out)
+        self._signalize(sid_in)
+        load = self._add_station("load", fa, kind="load")
+        unload = self.stations[tk.unload_id]
+
+        # leg A (unload stop -> field load): finish the inbound spine into the balloon
+        # (unload_node .. A_in), loop the balloon (A_in -> A_out), run the outbound spine
+        # (A_out .. out_node), then the siding out to the load stop.
+        legA = (list(tk.in_seq[idx_unload:]) + list(tk.home_edges)
+                + list(tk.out_seq[:k_out]) + list(sid_out))
+        # leg B (field load -> unload stop): siding in, then down the inbound spine from
+        # the field's attach node to the unload stop (which is one block short of the
+        # balloon, OUTSIDE the throat).
+        legB = list(sid_in) + list(tk.in_seq[k_in:idx_unload])
+        branch_edges = list(sid_out) + list(sid_in)
+        # robot must lay: any new spine (incl. the balloon when the trunk was created)
+        # plus this field's siding. spine_new already contains home_edges when created.
+        new_edges = list(spine_new) + branch_edges
+        return legA, legB, branch_edges, new_edges, load, unload, tk, created
+
+    def _nearest_spine(self, node_ids: list[int], pt) -> int:
+        """Index of the spine node at the closest RADIUS to pt. Matching by radius (not
+        raw distance) makes each field attach at the spine point abreast of it, so fields
+        at different distances spread out along the spine instead of bunching at the
+        inner nodes (which caused their sidings to converge at the home throat)."""
+        pr = math.hypot(pt[0], pt[1])
+        best_i, best_d = 0, math.inf
+        for i, nid in enumerate(node_ids):
+            nx, ny = self.nodes[nid]
+            d = abs(math.hypot(nx, ny) - pr)
+            if d < best_d:
+                best_d, best_i = d, i
+        return best_i
+
+    def detach_field(self, trunk_id: int, field_id: int, branch_edges, load_station_id) -> None:
+        """Reclaim a field: remove its siding + load station. If its trunk now has no
+        fields left, tear down the shared spine + balloon + unload station too."""
+        self.remove_edges(branch_edges)
+        self.remove_station(load_station_id)
+        tk = self.trunks.get(trunk_id)
+        if tk is None:
+            return
+        if field_id in tk.field_ids:
+            tk.field_ids.remove(field_id)
+        if not tk.field_ids:
+            self.remove_edges(list(tk.home_edges) + list(tk.out_seq) + list(tk.in_seq))
+            self.remove_station(tk.unload_id)
+            self.trunks.pop(trunk_id, None)
 
     def _add_station(self, base_name: str, pos: tuple[int, int], kind: str,
                      is_home: bool = False) -> Station:

@@ -17,11 +17,15 @@ import zlib
 import numpy as np
 
 from .. import balance
-from .rail import RailEdge, Block, Signal, Station
+from .rail import RailEdge, Block, Signal, Station, Trunk
 from .mining import MiningField
 from .trains import Train, Leg
 
-SAVE_VERSION = 1
+# v2: shared-track trunk network (per-sector shared corridors + field branches),
+# replacing the old one-dedicated-loop-per-field geometry. v1 saves used the old
+# converge-at-home loops that jam under the new traffic model, so they are not
+# loadable - startup cleanly falls back to a fresh game instead.
+SAVE_VERSION = 2
 
 
 # ---- fog grid (de)compression --------------------------------------------
@@ -83,7 +87,14 @@ def save_game(sim, path: str) -> None:
         },
         "research": sim.research.to_dict(),
         "net": {
-            "counters": {"nid": net._nid, "eid": net._eid, "bid": net._bid, "sid": net._sid},
+            "counters": {"nid": net._nid, "eid": net._eid, "bid": net._bid,
+                         "sid": net._sid, "tkid": net._tkid},
+            "trunks": {str(tk.id): {"bearing": tk.bearing, "home_edges": tk.home_edges,
+                                    "out_nodes": tk.out_nodes, "out_seq": tk.out_seq,
+                                    "in_nodes": tk.in_nodes, "in_seq": tk.in_seq,
+                                    "unload_id": tk.unload_id, "max_r": tk.max_r,
+                                    "field_ids": list(tk.field_ids)}
+                       for tk in net.trunks.values()},
             "nodes": {str(k): list(v) for k, v in net.nodes.items()},
             "edges": {str(e.id): {"a": e.a, "b": e.b, "points": [list(p) for p in e.points],
                                   "length": e.length, "block_id": e.block_id, "built": e.built}
@@ -102,7 +113,9 @@ def save_game(sim, path: str) -> None:
              "load_station_id": f.load_station_id, "buffer": f.buffer,
              "buffer_cap": f.buffer_cap, "edge_ids": list(f.edge_ids),
              "station_ids": list(f.station_ids), "rail_used": f.rail_used,
-             "home_slots": [list(s) for s in f.home_slots], "state": f.state}
+             "home_slots": [list(s) for s in f.home_slots], "state": f.state,
+             "trunk_id": f.trunk_id,
+             "legs_template": [[list(e), sid, list(w)] for (e, sid, w) in f.legs_template]}
             for f in sim.fields.values()
         ],
         "trains": [
@@ -250,7 +263,16 @@ def load_into(sim, path: str) -> None:
                                     s["field_id"], s["is_home"], s["enabled"], s["coal_buffer"], None)
     c = data["net"]["counters"]
     net._nid, net._eid, net._bid, net._sid = c["nid"], c["eid"], c["bid"], c["sid"]
+    net._tkid = c.get("tkid", 0)
+    net.trunks = {}
+    for k, t in data["net"].get("trunks", {}).items():
+        net.trunks[int(k)] = Trunk(int(k), t["bearing"], list(t["home_edges"]),
+                                   list(t["out_nodes"]), list(t["out_seq"]),
+                                   list(t["in_nodes"]), list(t["in_seq"]),
+                                   t["unload_id"], t.get("max_r", 0.0),
+                                   list(t.get("field_ids", [])))
     net.junction_occupant = None         # interlock is transient; re-granted on tick
+    net.throat_occupant = {}             # per-trunk throat mutex; re-granted on tick
 
     # fields
     sim.fields = {}
@@ -263,6 +285,9 @@ def load_into(sim, path: str) -> None:
         fld.home_slots = [tuple(s) for s in sf.get("home_slots", [])]
         fld.rail_used = sf.get("rail_used", 0)
         fld.state = sf.get("state", "active")
+        fld.trunk_id = sf.get("trunk_id", -1)
+        fld.legs_template = [(list(e), sid, tuple(w))
+                             for (e, sid, w) in sf.get("legs_template", [])]
         sim.fields[sf["id"]] = fld
 
     # trains (rebuild geometry, then restore dynamic state)
@@ -282,6 +307,12 @@ def load_into(sim, path: str) -> None:
         t.hp = st.get("hp", t.max_hp)
         t.recall = st.get("recall", False)
         sim.trains[st["id"]] = t
+    # re-bind each train to its trunk's home throat (after fields + net are restored)
+    for t in sim.trains.values():
+        fid = sim._train_field(t)
+        fld = sim.fields.get(fid) if fid is not None else None
+        if fld is not None:
+            sim._bind_throat(t, fld)
 
     # construction jobs (robots still building these)
     from .simulation import ConstructionJob

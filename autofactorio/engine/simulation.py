@@ -123,40 +123,44 @@ class Simulation:
         # cluster holder so it gives way before a crossing.
         cars = {tid: [(x, y) for (x, y, _a, _k) in t.car_poses()]
                 for tid, t in self.trains.items()}
-        holder = self.net.junction_occupant
         # anti-deadlock: only when the WHOLE network has frozen (no delivery and
         # nothing moving for a while - never the case in healthy traffic) do we let
         # the single most-stuck train push through, so a congested cluster can't
         # lock up permanently. Healthy busy traffic is untouched (no collisions).
         frozen = self._no_progress_time > balance.UNJAM_SECONDS
-        # keep a STABLE choice (highest priority) so the same train pushes through
-        # consistently until it escapes, rather than oscillating between trains.
-        unjammer = (min(self.trains.values(), key=lambda t: t.traffic_priority()).id
-                    if frozen and self.trains else None)
+        # the unjammer is the MOST-STUCK train that is actually trying to move (longest
+        # blocked) - pushing it through is what breaks the standoff. Trains parked at a
+        # station (loading/unloading) are working, not jammed, so they don't count.
+        movers = [t for t in self.trains.values() if t.state == "moving"]
+        unjammer = (max(movers, key=lambda t: t.blocked_time).id
+                    if frozen and movers else None)
         for tid in sorted(self.trains.keys(),
                           key=lambda i: self.trains[i].traffic_priority()):
             t = self.trains[tid]
             hard = [c for otid, cs in cars.items() if otid != tid for c in cs]
             if t.holds_junction:
-                yield_obs = []                            # has right of way in the crossing
+                yield_obs = []                            # has right of way in its throat
             else:
                 mykey = t.traffic_priority()
+                my_holder = self.net.throat_occupant.get(t.throat_trunk)
                 yield_obs = [c for otid, ot in self.trains.items()
                              if otid != tid
-                             and (ot.traffic_priority() < mykey or otid == holder)
+                             and (ot.traffic_priority() < mykey or otid == my_holder)
                              for c in cars[otid]]
             t.update_movement(dt, self.net, yield_obs, hard_obstacles=hard,
                               ignore_traffic=(tid == unjammer))
             if t.state == "waiting":
                 self._service_station(t, dt)
-        # the system has "progressed" if anything was delivered or any train OTHER
-        # than the unjammer actually moved this tick (blocked_time resets to 0 on
-        # meaningful movement). The unjammer's own forced motion is excluded, so the
-        # freeze timer only clears on organic progress. Healthy traffic always
-        # progresses -> the unjammer never fires -> no collisions.
+        # the network has "progressed" if anything was delivered, OR no train is even
+        # trying to move (everyone's parked at a station, i.e. not jammed), OR some
+        # moving train other than the unjammer actually advanced this tick (blocked_time
+        # resets to 0 on meaningful movement). Only a true MOVEMENT freeze - moving
+        # trains that none of which can advance - lets the timer run up to the unjammer.
+        others = [t for tid, t in self.trains.items()
+                  if tid != unjammer and t.state == "moving"]
         progressed = (self.delivered_total > self._last_delivered
-                      or any(t.blocked_time < 0.05 for tid, t in self.trains.items()
-                             if tid != unjammer))
+                      or not others
+                      or any(t.blocked_time < 0.05 for t in others))
         self._last_delivered = self.delivered_total
         self._no_progress_time = 0.0 if progressed else self._no_progress_time + dt
         self.net.update_signals()
@@ -210,50 +214,107 @@ class Simulation:
                         self.log(f"Train #{t.id} crushed wildlife (-{int(balance.TRAIN_CRUSH_DAMAGE)} hp).")
                         break
 
+    def _bind_throat(self, train: Train, field) -> None:
+        """Tie a train to its trunk's home throat (the mutex'd turnaround)."""
+        tk = self.net.trunks.get(getattr(field, "trunk_id", -1))
+        if tk is None:
+            return
+        center, radius = self.net.trunk_throat(tk)
+        train.set_throat(center, radius, tk.id, self.net)
+
+    def _spawn_position(self, train: Train, field) -> None:
+        """Place a freshly dispatched train so it never spawns ON TOP of another (the
+        whole sector shares the home throat). The first train for a field parks at its
+        own load stop (each field is a distinct spot); additional trains are spaced out
+        along the return leg, so they enter the shared queue already separated."""
+        idx = sum(1 for t in self.trains.values()
+                  if t is not train and self._train_field(t) == field.id)
+        if idx <= 0:                                  # first train: park at the load stop
+            train.head_s = train.leg_len
+            train.state = "waiting"
+            train.wait_timer = 0.0
+            train.idle_timer = 0.0
+            return
+        # extra train: drop it onto the return leg, staggered back from the field
+        gap = balance.MAX_TRAIN_LEN + balance.COUPLING + 2
+        train.begin_leg(self.net, 1)
+        train.head_s = min(train.leg_len, idx * gap)
+        train.state = "moving"
+
     def _arbitrate_junction(self, dt: float) -> None:
-        """Interlock the home cluster: at most ONE train may be moving through it at
-        a time. Grant the mutex to the highest-priority train approaching/inside it;
-        release it when that train parks (so its unload dwell doesn't block others)
-        or fully leaves the cluster. If the holder can't make progress for a couple
-        of seconds (e.g. blocked by a parked train), force-release and hand it to
-        someone else - so the cluster can never permanently deadlock. Everyone still
-        hard-stops before overlapping, so there are no collisions regardless."""
+        """Interlock each TRUNK's home throat (its balloon turnaround is too small for
+        two trains): at most one train through a throat at a time. Grant it to the
+        highest-priority train approaching/inside that throat; the holder keeps it
+        while it crosses AND while it sits unloading at the home stop (which is inside
+        the throat), and releases once it has driven all the way out. A holder that
+        can't progress for a couple of seconds is force-released so a throat can never
+        permanently deadlock; everyone still hard-stops before overlapping."""
         net = self.net
-        holder = self.trains.get(net.junction_occupant) if net.junction_occupant is not None else None
-        # release once the holder parks or has driven all the way THROUGH the crossing
-        # (head past the region exit). Note: not released merely for not-yet-entered,
-        # else an approaching holder would be revoked before it could cross.
-        passed = (holder is not None and (holder.junc_exit is None
-                                          or holder.head_s > holder.junc_exit + 0.05))
-        if holder is None or holder.state == "waiting" or passed:
+        for tkid in list(net.throat_occupant.keys()):       # drop entries for gone trunks
+            if tkid not in net.trunks:
+                net.throat_occupant.pop(tkid, None)
+        for tk in net.trunks.values():
+            occ = net.throat_occupant.get(tk.id)
+            holder = self.trains.get(occ) if occ is not None else None
+            if holder is not None and holder.throat_trunk != tk.id:
+                holder = None                                # stale; treat as free
+            revoked = None
             if holder is not None:
-                holder.holds_junction = False
-            net.junction_occupant = None
-            self._junction_hold_time = 0.0
-            holder = None
-        elif holder.speed <= 1e-3:                       # holder stuck -> recover
-            self._junction_hold_time += dt
-            if self._junction_hold_time >= balance.JUNCTION_STUCK_SECONDS:
-                holder.holds_junction = False
-                net.junction_occupant = None
-                self._junction_last_revoked = holder.id
-                self._junction_hold_time = 0.0
-                holder = None
-        else:
-            self._junction_hold_time = 0.0
-        if holder is not None:
-            return
-        requesters = [t for t in self.trains.values() if t.wants_junction(net)]
-        if not requesters:
-            return
-        if len(requesters) > 1 and self._junction_last_revoked is not None:
-            # don't immediately re-grant to the train we just unstuck
-            requesters = [t for t in requesters if t.id != self._junction_last_revoked] or requesters
-        winner = min(requesters, key=lambda t: t.traffic_priority())
-        net.junction_occupant = winner.id
-        winner.holds_junction = True
-        self._junction_hold_time = 0.0
-        self._junction_last_revoked = None
+                # release only once the holder's WHOLE train has cleared the throat (head
+                # past the exit by a full train length + clearance) - releasing when just
+                # the HEAD passed left the tail fouling the cramped balloon, so an inbound
+                # train granted next would clash with the departing train's wagons. On the
+                # inbound leg the throat sits at the very end, so this is never satisfied
+                # there: the holder keeps the throat through unload + the turnaround and
+                # only frees it after departing and pulling fully clear.
+                clear = balance.MAX_TRAIN_LEN + balance.JUNCTION_CLEAR
+                passed = (holder.junc_exit is None or holder.head_s > holder.junc_exit + clear)
+                if passed:
+                    holder.holds_junction = False
+                    net.throat_occupant[tk.id] = None
+                    holder = None
+                elif (holder.state == "moving"
+                      and holder.blocked_time >= balance.JUNCTION_STUCK_SECONDS):
+                    # holder can't progress (typically a NEARER train is between it and
+                    # the throat - priority inversion). Hand the throat off to the front
+                    # of the queue; exclude this train from the immediate re-grant so it
+                    # doesn't just grab it back. (blocked_time, unlike speed, ignores the
+                    # micro-jitter that would otherwise keep resetting a stuck timer.)
+                    holder.holds_junction = False
+                    net.throat_occupant[tk.id] = None
+                    revoked = holder.id
+                    holder = None
+            if holder is not None:
+                continue
+            # A train already physically INSIDE the throat is committed (it can't back
+            # out) and MUST get the grant, so a second train is never let in on top of
+            # it - this also re-establishes the interlock after a load (where the grant,
+            # which isn't persisted, was lost mid-turnaround).
+            inside = [t for t in self.trains.values()
+                      if t.throat_trunk == tk.id and t.state == "moving"
+                      and t.junc_enter is not None
+                      and (t.junc_exit is None or t.head_s <= t.junc_exit + 0.05)
+                      and t._in_region(net)]
+            if inside:
+                winner = min(inside, key=lambda t: t.traffic_priority())
+            else:
+                requesters = [t for t in self.trains.values()
+                              if t.throat_trunk == tk.id and t.wants_junction(net)]
+                if revoked is not None and len(requesters) > 1:
+                    requesters = [t for t in requesters if t.id != revoked] or requesters
+                if not requesters:
+                    continue
+                # grant to the train CLOSEST to entering the throat (front of the queue),
+                # NOT merely the highest-priority one - else a train granted from behind a
+                # nearer one can't reach the throat past it (priority-inversion deadlock).
+                # Once a winner actually enters the throat it's pinned by `inside` above,
+                # so this only decides the order trains commit in. Exact ties (same spot)
+                # fall back to traffic priority.
+                def _gap(t):
+                    return max(0.0, t.junc_enter - t.head_s) if t.junc_enter is not None else 0.0
+                winner = min(requesters, key=lambda t: (round(_gap(t), 1), t.traffic_priority()))
+            net.throat_occupant[tk.id] = winner.id
+            winner.holds_junction = True
 
     # ---- orbital cargo ships ----------------------------------------------
     def _update_ships(self, dt: float) -> None:
@@ -412,42 +473,40 @@ class Simulation:
             missing = {k: v for k, v in costs.items() if self.economy.inv.get(k, 0) < v}
             return False, f"insufficient materials for field: need {missing}"
 
-        anchor = self._home_anchor(patch.cx, patch.cy, 0)
-        out_e, ret_e, load_st, unload_st = self.net.build_link(HOME, (patch.cx, patch.cy), anchor)
+        # attach the field to its sector's SHARED trunk (build a new trunk only if no
+        # existing one serves this bearing) - clustered fields share track instead of
+        # each piling a private loop onto the home ring.
+        bearing = math.atan2(patch.cy, patch.cx)
+        legA, legB, branch_e, new_e, load_st, unload_st, trunk, created = \
+            self.net.attach_field(bearing, (patch.cx, patch.cy))
         fid = self._fid
         self._fid += 1
         field = MiningField(fid, patch, balance.DEFAULT_FIELD_DRILLS, tier, load_st.id)
-        field.edge_ids = list(out_e) + list(ret_e)
-        field.station_ids = [load_st.id, unload_st.id]
+        field.edge_ids = list(branch_e)              # only the field-owned branch is reclaimable
+        field.station_ids = [load_st.id]             # the unload stop is the trunk's, shared
         field.rail_used = rails_needed
+        field.trunk_id = trunk.id
         field.state = "constructing"                 # a robot must lay it before it runs
-        for eid in field.edge_ids:                    # ghost the planned track
+        for eid in new_e:                            # ghost the not-yet-built track
             self.net.edges[eid].built = False
         load_st.field_id = fid
         load_st.name = f"{patch.ore}-{fid}-load"
-        unload_st.name = f"home-{fid}-unload"
+        unload_st.name = f"home-{trunk.id}-unload"
+        trunk.field_ids.append(fid)
         patch.claimed = True
         self.fields[fid] = field
 
-        legs = [Leg(out_e, load_st.id, ("full_cargo",)),
-                Leg(ret_e, unload_st.id, ("empty_cargo",))]
-        self._new_job(fid, patch.cx, patch.cy, list(field.edge_ids), legs, activates_field=True)
+        legs = [Leg(legA, load_st.id, ("full_cargo",)),
+                Leg(legB, unload_st.id, ("empty_cargo",))]
+        field.legs_template = [(list(legA), load_st.id, ("full_cargo",)),
+                               (list(legB), unload_st.id, ("empty_cargo",))]
+        self._new_job(fid, patch.cx, patch.cy, list(new_e), legs, activates_field=True)
         self.economy.spend(costs)
         self._deplete_nearer_fields(fid, math.dist(HOME, (patch.cx, patch.cy)))
-        self.log(f"Field #{fid} planned on {patch.ore.replace('_', ' ')} patch #{patch_id}; "
+        shared = "" if created else " (shares an existing trunk)"
+        self.log(f"Field #{fid} planned on {patch.ore.replace('_', ' ')} patch #{patch_id}{shared}; "
                  f"a robot will lay {rails_needed} rail and {field.drills} drills.")
         return True, f"field #{fid} planned on patch #{patch_id} ({patch.ore})"
-
-    # ---- home-ring anchors (keep loops from overlapping at home) ----------
-    def _home_anchor(self, fx: float, fy: float, ring: int) -> tuple[float, float]:
-        """Home turnaround anchor in the FIELD's own direction (so the loop is a
-        clean radial corridor that doesn't cross other directions), pushed onto a
-        farther ring for each EXTRA loop to the same field so duplicates don't
-        coincide. Same-direction DIFFERENT fields may still share a corridor; the
-        traffic interlock + anti-deadlock keep that flowing rather than colliding."""
-        ang = math.atan2(fy, fx)
-        radius = balance.HOME_RING + ring * balance.HOME_RING_BAY
-        return math.cos(ang) * radius, math.sin(ang) * radius
 
     # ---- construction jobs (robots lay the track + drills) ----------------
     def _new_job(self, field_id, x, y, edge_ids, legs, activates_field):
@@ -465,8 +524,12 @@ class Simulation:
                 e.built = True
         tid = self._tid
         self._tid += 1
-        self.trains[tid] = Train(tid, job.legs, balance.DEFAULT_WAGONS, self.net, self.research)
+        train = Train(tid, job.legs, balance.DEFAULT_WAGONS, self.net, self.research)
+        self.trains[tid] = train
         field = self.fields.get(job.field_id)
+        if field is not None:
+            self._bind_throat(train, field)
+            self._spawn_position(train, field)
         if job.activates_field and field is not None:
             field.state = "active"
         self.jobs.pop(job.id, None)
@@ -487,43 +550,29 @@ class Simulation:
                 other.patch.reserve = max(0, int(other.patch.reserve * (1.0 - frac)))
 
     def add_train(self, field_id: int) -> tuple[bool, str]:
-        """Add throughput to a field by building a SECOND independent parallel
-        loop (its own one-way lanes + stations + train) to the same patch. Keeping
-        loops dedicated means no shared blocks, so it stays collision/deadlock-free."""
+        """Add throughput to a field by running a SECOND train on its existing branch
+        (shared track). No new rail is laid: the two trains share every block and
+        simply follow each other (one-train-per-block), queueing at the stations - so
+        it stays collision/deadlock-free and visibly busy. Costs only rolling stock."""
         field = self.fields.get(field_id)
         if field is None:
             return False, f"no field #{field_id}"
-        patch = field.patch
-        dist = math.dist(HOME, (patch.cx, patch.cy))
-        rails_needed = int(dist * 1.15) + 10
-        signals_needed = max(2, rails_needed // balance.SIGNAL_SPACING)
-        costs = {
-            "train_stop": 2,
-            "rail": rails_needed,
-            "rail_signal": signals_needed,
-            "locomotive": 1,
-            "cargo_wagon": balance.DEFAULT_WAGONS,
-        }
+        if not field.legs_template:
+            return False, f"field #{field_id} has no route yet"
+        costs = {"locomotive": 1, "cargo_wagon": balance.DEFAULT_WAGONS}
         if not self.economy.have(costs):
-            return False, "insufficient materials for a second loop"
-        ring = len(field.station_ids) // 2          # extra loops stack on outer rings
-        anchor = self._home_anchor(patch.cx, patch.cy, ring)
-        out_e, ret_e, load_st, unload_st = self.net.build_link(HOME, (patch.cx, patch.cy), anchor)
-        load_st.field_id = field_id
-        load_st.name = f"{patch.ore}-{field_id}-load2"
-        unload_st.name = f"home-{field_id}-unload2"
-        field.edge_ids += list(out_e) + list(ret_e)      # reclaim this loop too
-        field.station_ids += [load_st.id, unload_st.id]
-        field.rail_used += rails_needed
-        for eid in list(out_e) + list(ret_e):            # ghost until a robot lays it
-            self.net.edges[eid].built = False
-        legs = [Leg(out_e, load_st.id, ("full_cargo",)),
-                Leg(ret_e, unload_st.id, ("empty_cargo",))]
-        self._new_job(field_id, patch.cx, patch.cy, list(out_e) + list(ret_e),
-                      legs, activates_field=False)
+            return False, "insufficient rolling stock for another train"
+        legs = [Leg(list(e), sid, tuple(w)) for (e, sid, w) in field.legs_template]
+        # no construction needed (track already exists): dispatch immediately
+        tid = self._tid
+        self._tid += 1
+        train = Train(tid, legs, balance.DEFAULT_WAGONS, self.net, self.research)
+        self.trains[tid] = train
+        self._bind_throat(train, field)
+        self._spawn_position(train, field)
         self.economy.spend(costs)
-        self.log(f"Second loop for field #{field_id} planned; a robot will lay the track.")
-        return True, f"second loop for field #{field_id} planned"
+        self.log(f"Second train #{tid} dispatched on field #{field_id}'s shared track.")
+        return True, f"train #{tid} added to field #{field_id}"
 
     def abandon_field(self, field_id: int) -> tuple[bool, str]:
         """Begin decommissioning a depleted field. This does NOT instantly remove
@@ -582,15 +631,15 @@ class Simulation:
 
     def teardown_field_track(self, field) -> dict:
         """Called by a robot that has reached a decommissioned field: remove its
-        track from the network and return the materials it should haul home
-        (drills + stops fully recovered, rail partially)."""
-        self.net.remove_edges(field.edge_ids)
-        for sid in field.station_ids:
-            self.net.remove_station(sid)
+        BRANCH from the network (and the shared trunk too, once its last field is
+        gone) and return the materials it should haul home (drills + stops fully
+        recovered, rail partially)."""
+        load_id = field.station_ids[0] if field.station_ids else field.load_station_id
+        self.net.detach_field(field.trunk_id, field.id, field.edge_ids, load_id)
         drill_item = "electric_drill" if field.tier == "electric" else "burner_drill"
         materials = {
             "rail": int(field.rail_used * balance.RECLAIM_REFUND),
-            "train_stop": len(field.station_ids),
+            "train_stop": len(field.station_ids) + 1,    # load stop + share of the trunk stop
             drill_item: field.drills,
         }
         self.fields.pop(field.id, None)

@@ -64,14 +64,33 @@ run.py ──► ui/app.py ──► engine/simulation.py ──► engine/{worl
 - **hud.py / console.py** — top stats bar and bottom director/scout comms log.
 - **app.py** — window, input, and the update/draw loop.
 
-## Collision-free one-way track
+## Collision-free shared-track network
 Real Factorio uses rail + chain signals to carve track into mutually-exclusive
 blocks (one train per block). AutoFactorio keeps that invariant and drops the
 geometry: track is a **directed** graph built as two parallel one-way lanes, each
 edge is its own block with a lock, and a train acquires the blocks under its body
 and releases them behind it. Head-on collisions are structurally impossible
 (directed edges) and same-lane rear-end collisions are prevented by the block
-mutex. Dedicated per-field loops mean deadlock is effectively impossible.
+mutex (blocks are sized >= a train length).
+
+Fields are NOT each given a private loop. They are grouped into angular **sectors**
+(`engine/rail.py` `Trunk`): each sector has ONE shared double-track **main line** -
+a home balloon-loop with a single unload stop, then a straight radial spine running
+outward. A field attaches to its sector's trunk via a short **siding** at its own
+radius (`attach_field`), so trains for different fields **follow each other along the
+common spine** (intermingling, multi-destination shared track) and only the short
+sidings are private. Same-direction fields therefore share a corridor instead of
+piling separate loops onto the home area (which used to gridlock).
+
+The one spot too small for two trains is each trunk's home **throat** (the balloon
+turnaround), so it's an interlock: at most one train traverses a throat at a time
+(`Simulation._arbitrate_junction`), granted to the train nearest to entering (front
+of queue, avoiding priority inversion) and held until its whole train clears. The
+unload stop sits just OUTSIDE the throat, so returning trains always reach it without
+contending - only departing trains queue for the turnaround. A trunk caps how many
+fields share its throat (`TRUNK_MAX_FIELDS`); an extra in-direction field starts a new
+trunk. A global anti-deadlock watchdog lets the single most-stuck train push through
+if the whole network ever freezes, so it can never permanently lock up.
 
 ## Testing
 Headless smoke tests (no window, run with the venv python):

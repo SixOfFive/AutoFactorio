@@ -24,10 +24,15 @@ class MiningField:
     buffer_cap: int = 8000
     _accum: float = 0.0
     # for track reclamation when the field is abandoned
-    edge_ids: list = field(default_factory=list)
+    edge_ids: list = field(default_factory=list)       # field-OWNED branch edges (not the shared stem)
     station_ids: list = field(default_factory=list)
     home_slots: list = field(default_factory=list)   # (ring, slot) home anchors this field owns
     rail_used: int = 0
+    # shared-track linkage: which trunk this field's branch hangs off, and the leg
+    # template (full loop edges incl. the shared stem) so add_train can spawn extra
+    # trains on the same branch without laying new track
+    trunk_id: int = -1
+    legs_template: list = field(default_factory=list)  # [(edges, station_id, wait), ...]
     # lifecycle: constructing (a robot is laying track + drills) -> active ->
     # recalling (trains heading home to storage) -> dismantling -> removed
     state: str = "active"

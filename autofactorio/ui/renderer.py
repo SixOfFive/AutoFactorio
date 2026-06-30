@@ -167,17 +167,19 @@ class Renderer:
             self._blit(screen, cam, "train_stop", st.pos[0], st.pos[1], 2.0)
 
     def _junction(self, screen, cam, sim):
-        """Outline the home junction throat; tint it red while a train holds it."""
+        """Outline each trunk's home throat (its turnaround interlock); tint it red
+        while a train holds it, so the shared-track yard reads clearly."""
         if cam.zoom < 5:
             return
-        cx, cy = sim.net.junction_center
-        sx, sy = cam.world_to_screen(cx, cy)
-        rad = int(sim.net.junction_radius * cam.zoom)
-        if not self._on(cam, sx, sy, rad + 10):
-            return
-        busy = sim.net.junction_occupant is not None
-        col = (150, 90, 70) if busy else (70, 78, 92)
-        pygame.draw.circle(screen, col, (int(sx), int(sy)), rad, max(1, int(cam.zoom * 0.05)))
+        for tk in sim.net.trunks.values():
+            (cx, cy), rad_w = sim.net.trunk_throat(tk)
+            sx, sy = cam.world_to_screen(cx, cy)
+            rad = int(rad_w * cam.zoom)
+            if not self._on(cam, sx, sy, rad + 10):
+                continue
+            busy = sim.net.throat_occupant.get(tk.id) is not None
+            col = (150, 90, 70) if busy else (70, 78, 92)
+            pygame.draw.circle(screen, col, (int(sx), int(sy)), rad, max(1, int(cam.zoom * 0.06)))
 
     def _fields(self, screen, cam, sim):
         for f in sim.fields.values():
