@@ -32,6 +32,9 @@ RECIPES = {
     "engine_unit":        {"in": {"iron_gear": 1, "steel_plate": 1, "iron_plate": 2}, "out": {"engine_unit": 1}, "time": 2.0},
     # research currency: the factory makes science from surplus; research spends it
     "science_pack":       {"in": {"electronic_circuit": 1, "iron_plate": 1, "copper_plate": 1}, "out": {"science_pack": 1}, "time": 1.0},
+    # processed fuels: convert surplus coal into ever denser train fuel (see FUEL_BURN)
+    "solid_fuel":         {"in": {"coal": 3},                                "out": {"solid_fuel": 1},         "time": 1.0},
+    "rocket_fuel":        {"in": {"solid_fuel": 5, "steel_plate": 1},        "out": {"rocket_fuel": 1},        "time": 4.0},
     # buildables
     "rail":          {"in": {"iron_stick": 1, "steel_plate": 1, "stone": 1},                       "out": {"rail": 2},          "time": 0.5},
     "rail_signal":   {"in": {"electronic_circuit": 1, "iron_plate": 5},                            "out": {"rail_signal": 1},   "time": 0.5},
@@ -57,6 +60,7 @@ DISPLAY_NAME = {
     "train_stop": "Train stop", "electric_drill": "Electric drill", "burner_drill": "Burner drill",
     "stone_furnace": "Furnace", "assembler": "Assembler", "locomotive": "Locomotive",
     "cargo_wagon": "Cargo wagon", "science_pack": "Science", "robot": "Robot",
+    "solid_fuel": "Solid fuel", "rocket_fuel": "Rocket fuel",
 }
 
 # ---------------------------------------------------------------------------
@@ -92,8 +96,21 @@ COUPLING = 1                       # tile gap between cars
 MAX_TRAIN_LEN = 15                 # 1 loco + 2 wagons + couplings (used for block spacing)
 
 COAL_BURN_SECONDS = 6.67           # run-seconds added per 1 coal
-LOCO_FUEL_SLOTS = 3                # max coal a loco holds
+LOCO_FUEL_SLOTS = 3                # fuel units a loco holds (capacity = slots * burn)
 LOCO_START_FUEL = 3               # coal a freshly-built loco carries
+
+# Fuel tiers: the base converts surplus coal into denser fuels (RECIPES above), and
+# trains burn the BEST available - each unit gives far more run-seconds, so a loco
+# refuelled with rocket fuel goes much further between stops. burn = run-seconds/unit.
+FUEL_BURN = {"coal": COAL_BURN_SECONDS, "solid_fuel": 24.0, "rocket_fuel": 150.0}
+FUEL_ORDER = ["rocket_fuel", "solid_fuel", "coal"]   # best first (trains draw in this order)
+FUEL_COAL_RESERVE = 250            # keep this much coal before converting it to fuel
+ROCKET_FUEL_TECH = 20              # tech level that unlocks rocket-fuel processing
+
+
+def fuel_efficiency(level: int) -> float:
+    """Research 'Fuel Efficiency': every fuel burns longer with tech (capped ~2.5x)."""
+    return min(2.5, 1.0 + 0.004 * level)
 
 # Train-vs-train collision avoidance: a train yields to any HIGHER-PRIORITY train
 # (loaded/returning beats empty/outbound; id breaks ties) whose car comes within
@@ -170,6 +187,8 @@ STOCK_TARGETS = {
     "stone_furnace": 8, "locomotive": 3, "cargo_wagon": 6,
     "science_pack": 120,    # accumulate research currency from surplus production
     "robot": 3,             # keep robots ready to deploy up to the research cap
+    "solid_fuel": 250,      # convert surplus coal into denser train fuel...
+    "rocket_fuel": 80,      # ...and the densest tier once it's unlocked by research
 }
 
 # ---------------------------------------------------------------------------
@@ -187,6 +206,8 @@ STORAGE_CAP_START = {
     "iron_ore": 2500, "copper_ore": 2500, "coal": 2500, "stone": 2500,
     # smelted plates
     "iron_plate": 600, "copper_plate": 500, "steel_plate": 300, "stone_brick": 300,
+    # processed fuels (denser than coal, so smaller caps go a long way)
+    "solid_fuel": 400, "rocket_fuel": 120,
     # research currency
     "science_pack": 120,
     # buildables
@@ -200,6 +221,7 @@ STORAGE_CAP_START = {
 STORAGE_CAP_STEP = {
     "iron_ore": 2000, "copper_ore": 2000, "coal": 2000, "stone": 2000,
     "iron_plate": 400, "copper_plate": 300, "steel_plate": 200, "stone_brick": 200,
+    "solid_fuel": 250, "rocket_fuel": 80,
     "science_pack": 60,
     "rail": 200, "rail_signal": 30, "chain_signal": 15, "train_stop": 15,
     "burner_drill": 15, "electric_drill": 15, "stone_furnace": 15, "assembler": 10,

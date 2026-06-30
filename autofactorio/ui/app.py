@@ -280,7 +280,8 @@ class App:
         lines.append(("", False))
         lines.append(("STORAGE", True))
         order = ["iron_ore", "copper_ore", "stone", "iron_plate", "copper_plate",
-                 "steel_plate", "stone_brick", "coal", "electronic_circuit", "iron_gear",
+                 "steel_plate", "stone_brick", "coal", "solid_fuel", "rocket_fuel",
+                 "electronic_circuit", "iron_gear",
                  "science_pack", "rail", "rail_signal", "chain_signal", "train_stop",
                  "burner_drill", "electric_drill", "stone_furnace", "assembler",
                  "locomotive", "cargo_wagon", "robot"]

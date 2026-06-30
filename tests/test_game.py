@@ -324,6 +324,78 @@ def test_train_crushes_animal_and_takes_damage():
     assert t.hp < hp_before
 
 
+def test_coal_converts_to_processed_fuels():
+    """Surplus coal is converted up the fuel chain (coal -> solid -> rocket), while
+    a coal reserve is kept for direct burning and rocket fuel needs its tech."""
+    sim = Simulation(Config())
+    sim.research.level = balance.ROCKET_FUEL_TECH      # unlock rocket fuel
+    sim._sync_research()
+    eco = sim.economy
+    eco.inv["coal"] = 8000
+    eco.inv["steel_plate"] = 200
+    for _ in range(int(60 / (1 / 60))):
+        eco.update(1 / 60)
+    assert eco.inv.get("solid_fuel", 0) > 0
+    assert eco.inv.get("rocket_fuel", 0) > 0
+    assert eco.inv["coal"] >= balance.FUEL_COAL_RESERVE   # reserve kept for burning
+
+
+def test_rocket_fuel_needs_its_tech():
+    sim = Simulation(Config())
+    sim.research.level = 0                              # rocket fuel NOT unlocked
+    sim._sync_research()
+    eco = sim.economy
+    eco.inv["coal"] = 8000
+    eco.inv["steel_plate"] = 200
+    for _ in range(int(40 / (1 / 60))):
+        eco.update(1 / 60)
+    assert eco.inv.get("solid_fuel", 0) > 0            # basic fuel always available
+    assert eco.inv.get("rocket_fuel", 0) == 0          # rocket fuel gated by research
+
+
+def test_best_available_fuel_prefers_denser():
+    eco = Simulation(Config()).economy
+    eco.inv["coal"] = 100
+    assert eco.best_available_fuel()[0] == "coal"
+    eco.inv["solid_fuel"] = 10
+    assert eco.best_available_fuel()[0] == "solid_fuel"
+    eco.inv["rocket_fuel"] = 1
+    fuel, burn = eco.best_available_fuel()
+    assert fuel == "rocket_fuel"
+    assert burn == balance.FUEL_BURN["rocket_fuel"]    # efficiency mult is 1.0 at L0
+
+
+def test_better_fuel_gives_longer_train_range():
+    sim = Simulation(Config())
+    iron = next(p for p in sim.world.discovered_patches() if p.ore == "iron_ore")
+    _build_active(sim, iron.id)
+    t = next(iter(sim.trains.values()))
+    eco = sim.economy
+    # coal-only refuel tops the loco to a short range
+    eco.inv.clear()
+    eco.inv["coal"] = 1000
+    t.fuel_seconds = 0.0
+    sim._refuel(t)
+    coal_range = t.fuel_seconds
+    # rocket fuel tops the same loco to a much longer range
+    eco.inv.clear()
+    eco.inv["rocket_fuel"] = 1000
+    t.fuel_seconds = 0.0
+    sim._refuel(t)
+    rocket_range = t.fuel_seconds
+    assert rocket_range > coal_range * 5               # far more run-seconds per loco
+
+
+def test_fuel_efficiency_research_scales_burn():
+    sim = Simulation(Config())
+    assert sim.research.fuel_efficiency == 1.0         # baseline at L0
+    sim.research.level = 500
+    assert sim.research.fuel_efficiency > 1.5          # research makes fuel last longer
+    sim._sync_research()
+    assert sim.economy.research_fuel_mult == sim.research.fuel_efficiency
+    assert sim.economy.rocket_fuel_unlocked is True
+
+
 def test_robot_refuels_stalled_train():
     """A train that runs out of fuel must be rescued: a robot hauls coal from base
     and pours it in so the dead train (which blocks track) can move again."""

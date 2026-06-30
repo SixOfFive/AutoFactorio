@@ -62,6 +62,14 @@ class Research:
         return balance.max_robots(self.level)
 
     @property
+    def fuel_efficiency(self) -> float:
+        return balance.fuel_efficiency(self.level)
+
+    @property
+    def rocket_fuel_unlocked(self) -> bool:
+        return self.level >= balance.ROCKET_FUEL_TECH
+
+    @property
     def spaceflight(self) -> bool:
         return self.level >= balance.SPACE_TECH_LEVEL
 

@@ -28,6 +28,7 @@ class Robot:
         self.target = None
         self.attack_cd = 0.0
         self.carry_coal = 0.0
+        self.carry_fuel = 0.0                    # run-seconds of fuel carried to a stalled train
         self.fuel_phase: str | None = None       # 'to_coal' | 'return'
         self.dismantle_phase: str | None = None  # 'to_field' | 'to_home'
         self.carry_reclaim: dict = {}            # materials hauled back from a torn-up field
@@ -318,14 +319,17 @@ class Robots:
         if t is None or not t.stalled:               # train gone or already moving
             r.task = "explore"
             r.target = None
+            r.carry_fuel = 0.0
             return
         spd = balance.ROBOT_SPEED * sim.research.construction_mult
-        if r.carry_coal <= 0:
-            # fetch coal from base storage (the slow patch->base 'fuel' task keeps
-            # the base stocked when coal is globally short)
+        if r.carry_fuel <= 0:
+            # collect the best fuel from base (the slow patch->base 'fuel' task keeps
+            # coal stocked when fuel is globally short)
             d = r.move_toward(0.0, 0.0, spd, dt)
             if d < 2.5:
-                r.carry_coal = sim.economy.take_coal(balance.ROBOT_FUEL_CARRY)
+                fuel, burn = sim.economy.best_available_fuel()
+                if fuel is not None:
+                    r.carry_fuel = sim.economy.take(fuel, balance.ROBOT_FUEL_CARRY) * burn
             return
         head = _train_head(t)
         if head is None:
@@ -334,11 +338,11 @@ class Robots:
             return
         d = r.move_toward(head[0], head[1], spd, dt)
         if d <= balance.ROBOT_ATTACK_RANGE + 1.0:
-            t.fuel_seconds += r.carry_coal * balance.COAL_BURN_SECONDS
+            t.fuel_seconds += r.carry_fuel
             t.stalled = False
             sim.log(f"Robot #{r.id} refuelled stalled train #{t.id} "
-                    f"(+{int(r.carry_coal)} coal); it can roll again.")
-            r.carry_coal = 0.0
+                    f"(+{int(r.carry_fuel)}s run-time); it can roll again.")
+            r.carry_fuel = 0.0
             r.task = "explore"
             r.target = None
 

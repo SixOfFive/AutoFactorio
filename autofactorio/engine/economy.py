@@ -28,6 +28,7 @@ _BUILD_ORDER = [
     "stone_furnace", "rail", "rail_signal", "chain_signal",
     "train_stop", "electric_drill", "robot",   # robot kept ahead of the steel-hungry
     "assembler", "cargo_wagon", "locomotive",  # rolling stock so it actually gets made
+    "solid_fuel", "rocket_fuel",  # convert surplus coal into denser train fuel
     "science_pack",     # made from surplus circuits/plates; fuels research
 ]
 _IRON_RESERVE_FOR_STEEL = 40       # keep this many iron plates before making steel
@@ -55,6 +56,8 @@ class Economy:
         self.research_furnace_mult = 1.0    # smelting speed
         self.research_craft_mult = 1.0      # crafting speed
         self.research_storage_mult = 1.0    # storage capacity (scales every cap)
+        self.research_fuel_mult = 1.0       # fuel-efficiency (run-seconds per fuel unit)
+        self.rocket_fuel_unlocked = False   # rocket-fuel processing researched yet?
         self.total_smelted = 0
         self.total_crafted = 0
 
@@ -104,9 +107,22 @@ class Economy:
         return cap is not None and self.inv.get(item, 0) >= cap
 
     def take_coal(self, n: int) -> int:
-        n = min(n, self.inv.get("coal", 0))
-        self.inv["coal"] -= n
+        return self.take("coal", n)
+
+    def take(self, item: str, n: int) -> int:
+        """Remove up to n of item; returns the amount actually removed."""
+        n = min(int(n), self.inv.get(item, 0))
+        if n > 0:
+            self.inv[item] -= n
         return n
+
+    def best_available_fuel(self) -> tuple[str | None, float]:
+        """The densest fuel currently in stock and its run-seconds per unit (scaled
+        by fuel-efficiency research). Trains/robots draw this first."""
+        for f in balance.FUEL_ORDER:
+            if self.inv.get(f, 0) > 0:
+                return f, balance.FUEL_BURN[f] * self.research_fuel_mult
+        return None, 0.0
 
     # ---- production -------------------------------------------------------
     def update(self, dt: float) -> None:
@@ -150,6 +166,13 @@ class Economy:
             guard += 1
             progress = False
             for item in _BUILD_ORDER:
+                # processed fuels: only convert SURPLUS coal (keep a reserve for
+                # direct burning), and only make rocket fuel once it's researched
+                if item == "rocket_fuel" and not self.rocket_fuel_unlocked:
+                    continue
+                if item in ("solid_fuel", "rocket_fuel") \
+                        and self.inv.get("coal", 0) <= balance.FUEL_COAL_RESERVE:
+                    continue
                 cap = self.cap_of(item)
                 if item == "science_pack":
                     # fill science to its (tech-scaled) storage cap so the next,

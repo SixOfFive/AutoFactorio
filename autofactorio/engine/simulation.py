@@ -336,12 +336,17 @@ class Simulation:
         return True
 
     def _refuel(self, train: Train) -> None:
-        cap = balance.LOCO_FUEL_SLOTS * balance.COAL_BURN_SECONDS
-        if train.fuel_seconds >= cap - balance.COAL_BURN_SECONDS:
+        # burn the BEST available fuel - denser fuel packs more run-seconds per slot,
+        # so the loco's range (and time between refuels) grows with better fuel.
+        fuel, burn = self.economy.best_available_fuel()
+        if fuel is None or burn <= 0:
             return
-        need = int((cap - train.fuel_seconds) / balance.COAL_BURN_SECONDS)
-        got = self.economy.take_coal(need)
-        train.fuel_seconds += got * balance.COAL_BURN_SECONDS
+        cap = balance.LOCO_FUEL_SLOTS * burn
+        if train.fuel_seconds >= cap - burn:
+            return
+        need = int((cap - train.fuel_seconds) / burn) + 1
+        got = self.economy.take(fuel, need)
+        train.fuel_seconds += got * burn
 
     # ---- build actions (the deterministic autopilot) ----------------------
     def choose_tier(self) -> str:
@@ -583,6 +588,8 @@ class Simulation:
         self.economy.research_furnace_mult = self.research.furnace_mult
         self.economy.research_craft_mult = self.research.craft_mult
         self.economy.research_storage_mult = self.research.storage_mult
+        self.economy.research_fuel_mult = self.research.fuel_efficiency
+        self.economy.rocket_fuel_unlocked = self.research.rocket_fuel_unlocked
 
     def build_assembler(self, n: int = 1) -> tuple[bool, str]:
         if not self.economy.spend({"assembler": n}):

@@ -59,6 +59,7 @@ def save_game(sim, path: str) -> None:
             "next_id": sim.robots._rid,
             "list": [{"id": r.id, "x": r.x, "y": r.y, "heading": r.heading, "hp": r.hp,
                       "explorer": r.explorer, "carry_coal": r.carry_coal,
+                      "carry_fuel": r.carry_fuel,
                       "angle": r.angle, "radius": r.radius, "task": r.task,
                       "target": r.target, "dismantle_phase": r.dismantle_phase,
                       "carry_reclaim": dict(r.carry_reclaim)} for r in sim.robots.values()],
@@ -180,6 +181,7 @@ def load_into(sim, path: str) -> None:
         r.heading = rd.get("heading", 0.0)
         r.hp = rd.get("hp", 100.0)
         r.carry_coal = rd.get("carry_coal", 0.0)
+        r.carry_fuel = rd.get("carry_fuel", 0.0)
         r.angle = rd.get("angle", 0.7)
         r.radius = rd.get("radius", 18.0)
         r.task = rd.get("task", "explore")
