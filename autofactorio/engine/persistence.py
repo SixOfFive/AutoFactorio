@@ -44,6 +44,11 @@ def save_game(sim, path: str) -> None:
         "speed": sim.speed,
         "delivered_total": sim.delivered_total,
         "counters": {"fid": sim._fid, "tid": sim._tid},
+        "ships": {
+            "next_id": sim._ship_id, "timer": sim._ship_timer, "launched": sim.ships_launched,
+            "list": [{"id": s.id, "reward": s.reward, "jitter": s.jitter,
+                      "climb": s.climb, "delivered": s.delivered} for s in sim.ships],
+        },
         "explored": _enc_grid(sim.world.explored),
         "patches": [
             {"id": p.id, "reserve": p.reserve, "discovered": p.discovered, "claimed": p.claimed}
@@ -154,6 +159,16 @@ def load_into(sim, path: str) -> None:
             p.claimed = sp["claimed"]
 
     sim.kills = data.get("kills", 0)
+
+    # orbital ships (forward-compatible: absent in older saves)
+    from .simulation import Ship
+    sd = data.get("ships", {})
+    sim._ship_id = sd.get("next_id", 0)
+    sim._ship_timer = sd.get("timer", 0.0)
+    sim.ships_launched = sd.get("launched", 0)
+    sim.ships = [Ship(s["id"], s["reward"], s.get("jitter", 0.0),
+                      s.get("climb", 0.0), s.get("delivered", False))
+                 for s in sd.get("list", [])]
 
     # robots
     from .robots import Robots, Robot

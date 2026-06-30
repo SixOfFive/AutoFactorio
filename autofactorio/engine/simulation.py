@@ -70,6 +70,8 @@ class Simulation:
         self._ship_timer = 0.0
         self._ship_id = 0
         self.ships_launched = 0
+        self._junction_hold_time = 0.0       # how long the cluster holder has stalled
+        self._junction_last_revoked = None   # train we just force-released (skip re-grant)
         self.kills = 0
         self._fid = 0
         self._tid = 0
@@ -110,27 +112,29 @@ class Simulation:
         self._sync_research()
         self.economy.update(dt)
 
-        # decide who holds the home-junction mutex this tick (granted by priority)
-        self._arbitrate_junction()
-        # snapshot car positions so trains can see each other and yield. Right of
-        # way goes to higher-priority trains (loaded/returning beat empty/outbound)
-        # and to whoever holds the junction; ties break by id so the order is
-        # strict -> there is always a train that yields to no one -> no deadlock.
-        positions = {tid: t.car_poses() for tid, t in self.trains.items()}
+        # decide who holds the home-cluster mutex this tick (granted by priority,
+        # force-released if it can't progress so the cluster never deadlocks)
+        self._arbitrate_junction(dt)
+        # snapshot car positions. Every train hard-stops before overlapping ANY
+        # other car (hard_obstacles -> no collisions ever); on top of that a
+        # non-holder predictively yields to higher-priority traffic and to the
+        # cluster holder so it gives way before a crossing.
+        cars = {tid: [(x, y) for (x, y, _a, _k) in t.car_poses()]
+                for tid, t in self.trains.items()}
         holder = self.net.junction_occupant
         for tid in sorted(self.trains.keys(),
                           key=lambda i: self.trains[i].traffic_priority()):
             t = self.trains[tid]
+            hard = [c for otid, cs in cars.items() if otid != tid for c in cs]
             if t.holds_junction:
-                obstacles = []                            # committed through the throat
+                yield_obs = []                            # has right of way in the crossing
             else:
                 mykey = t.traffic_priority()
-                obstacles = [(x, y)
-                             for otid, ot in self.trains.items()
+                yield_obs = [c for otid, ot in self.trains.items()
                              if otid != tid
                              and (ot.traffic_priority() < mykey or otid == holder)
-                             for (x, y, _a, _k) in positions[otid]]
-            t.update_movement(dt, self.net, obstacles)
+                             for c in cars[otid]]
+            t.update_movement(dt, self.net, yield_obs, hard_obstacles=hard)
             if t.state == "waiting":
                 self._service_station(t, dt)
         self.net.update_signals()
@@ -184,29 +188,50 @@ class Simulation:
                         self.log(f"Train #{t.id} crushed wildlife (-{int(balance.TRAIN_CRUSH_DAMAGE)} hp).")
                         break
 
-    def _arbitrate_junction(self) -> None:
-        """Interlock the home junction (the origin throat every loop crosses):
-        release it once the current holder's tail has cleared, then grant it to the
-        highest-priority train approaching it. At most one train is ever inside, so
-        departing trains never collide or block the crossing - the rest queue at the
-        chain signal just outside until it is their turn."""
+    def _arbitrate_junction(self, dt: float) -> None:
+        """Interlock the home cluster: at most ONE train may be moving through it at
+        a time. Grant the mutex to the highest-priority train approaching/inside it;
+        release it when that train parks (so its unload dwell doesn't block others)
+        or fully leaves the cluster. If the holder can't make progress for a couple
+        of seconds (e.g. blocked by a parked train), force-release and hand it to
+        someone else - so the cluster can never permanently deadlock. Everyone still
+        hard-stops before overlapping, so there are no collisions regardless."""
         net = self.net
-        occ = net.junction_occupant
-        if occ is not None:
-            t = self.trains.get(occ)
-            if t is None or t.clear_of_junction():
+        holder = self.trains.get(net.junction_occupant) if net.junction_occupant is not None else None
+        # release once the holder parks or has driven all the way THROUGH the crossing
+        # (head past the region exit). Note: not released merely for not-yet-entered,
+        # else an approaching holder would be revoked before it could cross.
+        passed = (holder is not None and (holder.junc_exit is None
+                                          or holder.head_s > holder.junc_exit + 0.05))
+        if holder is None or holder.state == "waiting" or passed:
+            if holder is not None:
+                holder.holds_junction = False
+            net.junction_occupant = None
+            self._junction_hold_time = 0.0
+            holder = None
+        elif holder.speed <= 1e-3:                       # holder stuck -> recover
+            self._junction_hold_time += dt
+            if self._junction_hold_time >= balance.JUNCTION_STUCK_SECONDS:
+                holder.holds_junction = False
                 net.junction_occupant = None
-                if t is not None:
-                    t.holds_junction = False
-                occ = None
-        if occ is not None:
-            return                                        # still in use; others wait
-        requesters = [t for t in self.trains.values() if t.wants_junction()]
+                self._junction_last_revoked = holder.id
+                self._junction_hold_time = 0.0
+                holder = None
+        else:
+            self._junction_hold_time = 0.0
+        if holder is not None:
+            return
+        requesters = [t for t in self.trains.values() if t.wants_junction(net)]
         if not requesters:
             return
+        if len(requesters) > 1 and self._junction_last_revoked is not None:
+            # don't immediately re-grant to the train we just unstuck
+            requesters = [t for t in requesters if t.id != self._junction_last_revoked] or requesters
         winner = min(requesters, key=lambda t: t.traffic_priority())
         net.junction_occupant = winner.id
         winner.holds_junction = True
+        self._junction_hold_time = 0.0
+        self._junction_last_revoked = None
 
     # ---- orbital cargo ships ----------------------------------------------
     def _update_ships(self, dt: float) -> None:
@@ -442,7 +467,8 @@ class Simulation:
         }
         if not self.economy.have(costs):
             return False, "insufficient materials for a second loop"
-        out_e, ret_e, load_st, unload_st = self.net.build_link(HOME, (patch.cx, patch.cy))
+        bay = len(field.station_ids) // 2          # extra loops sit on a farther ring
+        out_e, ret_e, load_st, unload_st = self.net.build_link(HOME, (patch.cx, patch.cy), bay)
         load_st.field_id = field_id
         load_st.name = f"{patch.ore}-{field_id}-load2"
         unload_st.name = f"home-{field_id}-unload2"

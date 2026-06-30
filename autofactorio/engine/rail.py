@@ -199,7 +199,7 @@ class RailNetwork:
             kind = "chain" if (i == 0 and chain_at_start) else "rail"
             self.signals.setdefault(e.a, Signal(e.a, kind, self.node_pos(e.a)))
 
-    def build_link(self, home: tuple[int, int], field_pt: tuple[int, int]):
+    def build_link(self, home: tuple[int, int], field_pt: tuple[int, int], bay: int = 0):
         """Build one continuous, smooth, collision-free loop to a field.
 
         The loop has two one-way lanes joined by wide U-turns at each end, with all
@@ -218,7 +218,13 @@ class RailNetwork:
         px, py = -uy, ux                            # perpendicular unit
         off = balance.LANE_OFFSET
 
-        home_a = (_snap(home[0], g), _snap(home[1], g))
+        # Anchor the loop's home end on a RING around the HQ, out in the field's
+        # own direction (instead of every loop converging on the origin). The home
+        # U-turn then sits on that side of the base, so loops to different fields
+        # fan out from distinct points and their track no longer all overlaps at
+        # the centre - the root cause of trains piling up / colliding at home.
+        ring = balance.HOME_RING + bay * balance.HOME_RING_BAY
+        home_a = (_snap(home[0] + ux * ring, g), _snap(home[1] + uy * ring, g))
         field_a = (_snap(field_pt[0], g), _snap(field_pt[1], g))
         home_b = (_snap(home_a[0] + px * off, g), _snap(home_a[1] + py * off, g))
         field_b = (_snap(field_a[0] + px * off, g), _snap(field_a[1] + py * off, g))

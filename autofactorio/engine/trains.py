@@ -130,7 +130,8 @@ class Train:
         return ids
 
     # ---- movement ---------------------------------------------------------
-    def update_movement(self, dt: float, net: RailNetwork, obstacles=None) -> None:
+    def update_movement(self, dt: float, net: RailNetwork, obstacles=None,
+                        hard_obstacles=None) -> None:
         if self.state != "moving":
             return
         if self.fuel_seconds <= 0:
@@ -155,9 +156,20 @@ class Train:
                 target = max(self.head_s, bstart - 0.05)
                 self.speed = 0.0
 
-        # train-vs-train avoidance: wait if a higher-priority train's car sits on
-        # the track just ahead (covers crossings between different loops and
-        # departing a station into a crash).
+        # home-cluster interlock: only the mutex holder may move through the central
+        # crossing. A train still waiting for the mutex HOLDS ITS POSITION as soon as
+        # it gets within approach of the crossing - it does NOT creep up to the edge,
+        # so the waiters stay spread around their stations instead of piling onto the
+        # boundary and blocking the one train that does have the mutex.
+        if not self.holds_junction and self.junc_enter is not None \
+                and self.head_s <= self.junc_exit + 1e-6:
+            if self._in_region(net) or (self.junc_enter - self.head_s) <= balance.JUNCTION_APPROACH:
+                target = self.head_s
+                self.speed = 0.0
+                self.waiting_for_train = True
+
+        # predictive yield: slow for higher-priority traffic ahead (so the lower
+        # train gives way before a crossing rather than nosing into it).
         if obstacles:
             look = min(self.leg_len, target + balance.TRAIN_LOOKAHEAD)
             hx, hy, _ = _point_at(self._pts, self._cum, target)
@@ -165,22 +177,24 @@ class Train:
             cd2 = balance.TRAIN_COLLISION_DIST ** 2
             for ox, oy in obstacles:
                 if (hx - ox) ** 2 + (hy - oy) ** 2 < cd2 or (bx - ox) ** 2 + (by - oy) ** 2 < cd2:
-                    target = self.head_s            # hold position and wait
+                    target = self.head_s
                     self.speed = 0.0
                     self.waiting_for_train = True
                     break
-            else:
-                self.waiting_for_train = False
 
-        # home-junction interlock (chain signal at the throat): a train that does
-        # not hold the junction mutex must not cross into it - it queues just
-        # outside until the arbiter grants the mutex by priority (Simulation).
-        if (self.junc_enter is not None and not self.holds_junction
-                and self.head_s <= self.junc_enter + 1e-6
-                and target > self.junc_enter - 0.05):
-            target = max(self.head_s, self.junc_enter - 0.05)
-            self.speed = 0.0
-            self.waiting_for_train = True
+        # hard collision guard: NEVER advance to within collision distance of any
+        # other train's car. This is unconditional (applies even to the mutex
+        # holder), so two trains can never physically overlap.
+        near = hard_obstacles if hard_obstacles is not None else obstacles
+        if near and target > self.head_s:
+            hx, hy, _ = _point_at(self._pts, self._cum, target)
+            cd2 = balance.TRAIN_COLLISION_DIST ** 2
+            for ox, oy in near:
+                if (hx - ox) ** 2 + (hy - oy) ** 2 < cd2:
+                    target = self.head_s
+                    self.speed = 0.0
+                    self.waiting_for_train = True
+                    break
 
         moved = target - self.head_s
         if moved > 0:
@@ -223,26 +237,21 @@ class Train:
         cls = 0 if (self.recall or self.cargo_total() > 0) else 1
         return (cls, self.id)
 
-    def wants_junction(self) -> bool:
-        """Approaching the junction throat on this leg and not yet holding it."""
-        if self.junc_enter is None or self.holds_junction or self.state != "moving":
-            return False
-        if self.junc_exit is not None and self.head_s > self.junc_exit:
-            return False
-        return (self.junc_enter - self.head_s) <= balance.JUNCTION_APPROACH
-
-    def clear_of_junction(self) -> bool:
-        """True once the whole train is past the junction span on its current leg
-        (so the mutex can be released)."""
-        if self.junc_exit is None:
-            return True
-        return (self.head_s - balance.MAX_TRAIN_LEN) > self.junc_exit
-
-    def touches_junction(self, net: RailNetwork) -> bool:
+    def _in_region(self, net: RailNetwork) -> bool:
+        """True if any of this train's cars is inside the home-cluster region."""
         for (x, y, _a, _k) in self.car_poses():
-            if net.in_junction(x, y, balance.JUNCTION_CLEAR):
+            if net.in_junction(x, y):
                 return True
         return False
+
+    def wants_junction(self, net: RailNetwork) -> bool:
+        """A moving train that needs the cluster mutex: it is already inside the
+        region, or its path is about to enter it on this leg."""
+        if self.junc_enter is None or self.holds_junction or self.state != "moving":
+            return False
+        if self.head_s > self.junc_exit + 1e-6:        # already past the region
+            return False
+        return self._in_region(net) or (self.junc_enter - self.head_s) <= balance.JUNCTION_APPROACH
 
     # ---- rendering --------------------------------------------------------
     def car_poses(self) -> list[tuple[float, float, float, str]]:

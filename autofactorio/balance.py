@@ -102,18 +102,28 @@ LOCO_START_FUEL = 3               # coal a freshly-built loco carries
 TRAIN_COLLISION_DIST = 3.2         # tiles
 TRAIN_LOOKAHEAD = 4.0              # tiles ahead the head checks for obstacles
 
-# Home junction interlock: every loop fans out through the origin (0,0), so the
-# convergence there is a single interlocked junction. A train reserves it (a
-# chain signal at the throat) BEFORE entering and only one train crosses at a
-# time; the rest queue just outside instead of stopping in the crossing and
-# blocking cross-traffic. Higher-priority (loaded/returning) trains win the grant.
-JUNCTION_RADIUS = 8.0              # tiles around origin treated as the home junction
+# Home junction interlock: every loop converges near the origin, so the whole
+# central cluster is one interlocked junction. Only ONE train may move inside it
+# at a time (a single mutex); everyone else waits OUTSIDE the cluster for their
+# turn. On top of that, EVERY train hard-stops before physically overlapping any
+# other car, so trains can never collide even mid-manoeuvre. Higher-priority
+# (loaded/returning) trains win the grant; a stuck holder is force-released so the
+# cluster can never deadlock.
+# The region sits JUST INSIDE the home stations (which are LANE_OFFSET=10 out), so
+# parked trains stay outside it and never block the one train crossing the origin.
+JUNCTION_RADIUS = 9.0              # tiles around origin treated as the home crossing
 JUNCTION_CLEAR = 1.5              # extra tiles the tail must pass before releasing
-JUNCTION_APPROACH = 6.0           # within this of the throat a train requests the grant
+JUNCTION_APPROACH = 7.0           # within this of the crossing a train requests the grant
+JUNCTION_STUCK_SECONDS = 2.0      # force-release the mutex if the holder can't progress
 
 # ---------------------------------------------------------------------------
 # Rail network
 # ---------------------------------------------------------------------------
+HOME_RING = 14                     # each loop's home turnaround sits this far from the
+                                   # HQ, out in its field's direction (so loops fan out
+                                   # from distinct points instead of all crossing at 0,0)
+HOME_RING_BAY = 6                  # extra ring distance per extra loop to the same field
+                                   # (add_train), so duplicate loops don't coincide
 RAIL_GRID = 2                      # rail nodes snap to even tile coords on straights
 LANE_OFFSET = 10                   # gap between the two one-way lanes (tiles); also the
                                    # diameter of the U-turn loops, so trains never turn sharp

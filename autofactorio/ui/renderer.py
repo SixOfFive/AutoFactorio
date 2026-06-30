@@ -227,6 +227,9 @@ class Renderer:
 
     def _trains(self, screen, cam, sim, dt):
         length = balance.ENTITY_LEN
+        if self._smoke_accum:                    # drop carry for trains that are gone
+            live = sim.trains
+            self._smoke_accum = {tid: v for tid, v in self._smoke_accum.items() if tid in live}
         for t in sim.trains.values():
             v = getattr(t, "variant", 0) % 4
             loco_name = self._LOCO_VARIANTS[v]

@@ -107,7 +107,9 @@ class Robots:
                 continue
             if r.attack_cd > 0:
                 r.attack_cd -= dt
-            if r.task == "repair":
+            if r.task == "deliver_fuel":
+                self._do_deliver_fuel(sim, r, dt)
+            elif r.task == "repair":
                 self._do_repair(sim, r, dt)
             elif r.task == "construct":
                 self._do_construct(sim, r, dt)
@@ -129,19 +131,36 @@ class Robots:
 
     # ---- assignment -------------------------------------------------------
     def _assign(self, sim) -> None:
-        # keep robots that are mid-job (constructing / dismantling) on task
+        # keep robots that are mid-job (constructing / dismantling / fuelling) on task
         busy = set()
         for r in self.list.values():
             keep = ((r.task == "construct" and r.target in sim.jobs) or
-                    (r.task == "dismantle" and r.dismantle_phase is not None))
+                    (r.task == "dismantle" and r.dismantle_phase is not None) or
+                    (r.task == "deliver_fuel" and r.target in sim.trains))
             if keep:
                 busy.add(r.id)
             else:
                 r.task = None
         covered_jobs = {self.list[rid].target for rid in busy if self.list[rid].task == "construct"}
         covered_fields = {self.list[rid].target for rid in busy if self.list[rid].task == "dismantle"}
+        fuelled = {self.list[rid].target for rid in busy if self.list[rid].task == "deliver_fuel"}
         free = sorted((r for r in self.list.values() if r.id not in busy),
                       key=lambda r: (r.explorer, r.id))    # explorer last
+        # 0. TOP priority: rescue stalled (out-of-fuel) trains - a dead train sits on
+        #    the track and can block the whole network, so haul coal to it at once.
+        for t in sim.trains.values():
+            if not t.stalled or t.id in fuelled:
+                continue
+            if not free:
+                break
+            head = _train_head(t)
+            ref = head if head is not None else (0.0, 0.0)
+            r = min(free, key=lambda r: (r.x - ref[0]) ** 2 + (r.y - ref[1]) ** 2)
+            r.task = "deliver_fuel"
+            r.target = t.id
+            r.carry_coal = 0.0
+            fuelled.add(t.id)
+            free.remove(r)
         # 1. repair the most-damaged trains
         damaged = sorted((t for t in sim.trains.values() if t.hp < t.max_hp - 0.5),
                          key=lambda t: t.hp)
@@ -291,6 +310,37 @@ class Robots:
                     r.target = None
                     r.task = "explore"
                 # else: storage full; wait at base and keep depositing as room frees
+
+    def _do_deliver_fuel(self, sim, r: Robot, dt: float) -> None:
+        """Rescue a stalled train: collect coal from base, drive out to the dead
+        train and pour fuel into it so it can move again (highest-priority task)."""
+        t = sim.trains.get(r.target) if r.target is not None else None
+        if t is None or not t.stalled:               # train gone or already moving
+            r.task = "explore"
+            r.target = None
+            return
+        spd = balance.ROBOT_SPEED * sim.research.construction_mult
+        if r.carry_coal <= 0:
+            # fetch coal from base storage (the slow patch->base 'fuel' task keeps
+            # the base stocked when coal is globally short)
+            d = r.move_toward(0.0, 0.0, spd, dt)
+            if d < 2.5:
+                r.carry_coal = sim.economy.take_coal(balance.ROBOT_FUEL_CARRY)
+            return
+        head = _train_head(t)
+        if head is None:
+            r.task = "explore"
+            r.target = None
+            return
+        d = r.move_toward(head[0], head[1], spd, dt)
+        if d <= balance.ROBOT_ATTACK_RANGE + 1.0:
+            t.fuel_seconds += r.carry_coal * balance.COAL_BURN_SECONDS
+            t.stalled = False
+            sim.log(f"Robot #{r.id} refuelled stalled train #{t.id} "
+                    f"(+{int(r.carry_coal)} coal); it can roll again.")
+            r.carry_coal = 0.0
+            r.task = "explore"
+            r.target = None
 
     def _do_fuel(self, sim, r: Robot, dt: float) -> None:
         # slow last-resort coal run: go to the nearest known coal patch, fill up,

@@ -324,6 +324,27 @@ def test_train_crushes_animal_and_takes_damage():
     assert t.hp < hp_before
 
 
+def test_robot_refuels_stalled_train():
+    """A train that runs out of fuel must be rescued: a robot hauls coal from base
+    and pours it in so the dead train (which blocks track) can move again."""
+    sim = Simulation(Config())
+    iron = next(p for p in sim.world.discovered_patches() if p.ore == "iron_ore")
+    _build_active(sim, iron.id)
+    t = next(iter(sim.trains.values()))
+    sim.economy.inv["coal"] = 500          # base has fuel to deliver
+    t.fuel_seconds = 0.0                    # strand it
+    sim.tick(1 / 60)
+    assert t.stalled                        # it is now dead on the track
+    rescued = False
+    for _ in range(int(240 / (1 / 60))):
+        sim.tick(1 / 60)
+        if not t.stalled and t.fuel_seconds > 0:
+            rescued = True
+            break
+    assert rescued, "robot never refuelled the stalled train"
+    assert any("refuelled stalled train" in e[1] for e in sim.events)
+
+
 def test_robot_repairs_damaged_train():
     sim = Simulation(Config())
     iron = next(p for p in sim.world.discovered_patches() if p.ore == "iron_ore")
@@ -530,59 +551,47 @@ def test_traffic_priority_loaded_and_recall_beat_empty():
     assert empty_key[1] == t.id                       # id is the tiebreak field
 
 
-def test_home_junction_interlock_single_occupant():
-    """The origin throat is interlocked: across a busy multi-field run at most one
-    train is ever physically inside it, the interlock actually engages (grants > 0),
-    and traffic keeps flowing (delivers, never permanently stalls)."""
+def test_no_train_collisions_across_a_busy_run():
+    """Home loops fan out from a ring (so their track never converges at the centre)
+    and every train hard-stops before overlapping another car, so across a busy
+    multi-field run NO two trains ever physically overlap, while traffic still flows
+    and never permanently stalls."""
     cfg = Config()
     cfg.llm.enabled = False
     sim = Simulation(cfg)
     director = Director(sim, cfg)
     dt = 1 / 60
-    grants = 0
-    prev = None
-    worst_inside = 0
+    overlaps = 0
+    thr = (balance.ENTITY_WIDTH * 0.9) ** 2
     for _ in range(int(360 / dt)):
         sim.tick(dt)
         director.update()
-        occ = sim.net.junction_occupant
-        if occ is not None and occ != prev:
-            grants += 1
-        prev = occ
-        inside = sum(1 for t in sim.trains.values()
-                     if any(sim.net.in_junction(x, y) for (x, y, _a, _k) in t.car_poses()))
-        worst_inside = max(worst_inside, inside)
-        assert inside <= 1, "two trains were inside the home junction at once"
-    assert grants > 0, "junction interlock never engaged"
-    assert worst_inside == 1                          # it did get used
+        poses = [t.car_poses() for t in sim.trains.values()]
+        for i in range(len(poses)):
+            for j in range(i + 1, len(poses)):
+                for (ax, ay, _a, _k) in poses[i]:
+                    if any((ax - bx) ** 2 + (ay - by) ** 2 < thr for (bx, by, _b, _k2) in poses[j]):
+                        overlaps += 1
+                        break
+    assert overlaps == 0, f"trains overlapped {overlaps} times (collisions)"
     s = sim.stats()
     assert s["delivered"] > 500
-    assert s["stalled_trains"] == 0                   # no deadlock at the throat
+    assert s["stalled_trains"] == 0                   # no permanent stall
 
 
-def test_junction_chain_signal_turns_red_when_reserved():
-    """While a train holds the junction, the chain signal guarding the throat
-    reads red (so the queued trains see a stop aspect)."""
-    cfg = Config()
-    cfg.llm.enabled = False
-    sim = Simulation(cfg)
-    director = Director(sim, cfg)
-    dt = 1 / 60
+def test_signal_aspect_goes_red_when_block_occupied():
+    """Live signal aspects: a signal reads red while a train sits on the block it
+    guards (so the rendered signals reflect real occupancy)."""
+    sim = Simulation(Config())
+    iron = next(p for p in sim.world.discovered_patches() if p.ore == "iron_ore")
+    _build_active(sim, iron.id)
     saw_red = False
-    for _ in range(int(300 / dt)):
-        sim.tick(dt)
-        director.update()
-        if sim.net.junction_occupant is None:
-            continue
-        for sig in sim.net.signals.values():
-            near = sig.pos[0] ** 2 + sig.pos[1] ** 2 <= (sim.net.junction_radius
-                                                         + balance.LANE_OFFSET + 2.0) ** 2
-            if sig.kind == "chain" and near and sig.aspect == "red":
-                saw_red = True
-                break
-        if saw_red:
+    for _ in range(int(120 / (1 / 60))):
+        sim.tick(1 / 60)
+        if any(s.aspect == "red" for s in sim.net.signals.values()):
+            saw_red = True
             break
-    assert saw_red, "throat chain signal never showed red while the junction was held"
+    assert saw_red, "no signal turned red while a train occupied a block"
 
 
 # ---- per-resource storage caps --------------------------------------------

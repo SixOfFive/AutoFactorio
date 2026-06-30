@@ -51,7 +51,7 @@ def build_report(sim) -> dict:
     for k in eco.caps:
         frac = eco.fill_fraction(k)
         if frac >= 0.6:
-            storage[k] = f"{int(eco.inv.get(k, 0))}/{eco.caps[k]}"
+            storage[k] = f"{int(eco.inv.get(k, 0))}/{eco.cap_of(k)}"
         if frac >= balance.STORAGE_RELIEF_FRACTION:
             backing_up.append(k)
 
