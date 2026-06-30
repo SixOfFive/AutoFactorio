@@ -72,6 +72,8 @@ class Simulation:
         self.ships_launched = 0
         self._junction_hold_time = 0.0       # how long the cluster holder has stalled
         self._junction_last_revoked = None   # train we just force-released (skip re-grant)
+        self._no_progress_time = 0.0         # global freeze timer (anti-deadlock gate)
+        self._last_delivered = 0
         self.kills = 0
         self._fid = 0
         self._tid = 0
@@ -122,6 +124,15 @@ class Simulation:
         cars = {tid: [(x, y) for (x, y, _a, _k) in t.car_poses()]
                 for tid, t in self.trains.items()}
         holder = self.net.junction_occupant
+        # anti-deadlock: only when the WHOLE network has frozen (no delivery and
+        # nothing moving for a while - never the case in healthy traffic) do we let
+        # the single most-stuck train push through, so a congested cluster can't
+        # lock up permanently. Healthy busy traffic is untouched (no collisions).
+        frozen = self._no_progress_time > balance.UNJAM_SECONDS
+        # keep a STABLE choice (highest priority) so the same train pushes through
+        # consistently until it escapes, rather than oscillating between trains.
+        unjammer = (min(self.trains.values(), key=lambda t: t.traffic_priority()).id
+                    if frozen and self.trains else None)
         for tid in sorted(self.trains.keys(),
                           key=lambda i: self.trains[i].traffic_priority()):
             t = self.trains[tid]
@@ -134,9 +145,20 @@ class Simulation:
                              if otid != tid
                              and (ot.traffic_priority() < mykey or otid == holder)
                              for c in cars[otid]]
-            t.update_movement(dt, self.net, yield_obs, hard_obstacles=hard)
+            t.update_movement(dt, self.net, yield_obs, hard_obstacles=hard,
+                              ignore_traffic=(tid == unjammer))
             if t.state == "waiting":
                 self._service_station(t, dt)
+        # the system has "progressed" if anything was delivered or any train OTHER
+        # than the unjammer actually moved this tick (blocked_time resets to 0 on
+        # meaningful movement). The unjammer's own forced motion is excluded, so the
+        # freeze timer only clears on organic progress. Healthy traffic always
+        # progresses -> the unjammer never fires -> no collisions.
+        progressed = (self.delivered_total > self._last_delivered
+                      or any(t.blocked_time < 0.05 for tid, t in self.trains.items()
+                             if tid != unjammer))
+        self._last_delivered = self.delivered_total
+        self._no_progress_time = 0.0 if progressed else self._no_progress_time + dt
         self.net.update_signals()
         self._reveal_along_trains()
         self._crush_animals()
@@ -390,7 +412,8 @@ class Simulation:
             missing = {k: v for k, v in costs.items() if self.economy.inv.get(k, 0) < v}
             return False, f"insufficient materials for field: need {missing}"
 
-        out_e, ret_e, load_st, unload_st = self.net.build_link(HOME, (patch.cx, patch.cy))
+        anchor = self._home_anchor(patch.cx, patch.cy, 0)
+        out_e, ret_e, load_st, unload_st = self.net.build_link(HOME, (patch.cx, patch.cy), anchor)
         fid = self._fid
         self._fid += 1
         field = MiningField(fid, patch, balance.DEFAULT_FIELD_DRILLS, tier, load_st.id)
@@ -414,6 +437,17 @@ class Simulation:
         self.log(f"Field #{fid} planned on {patch.ore.replace('_', ' ')} patch #{patch_id}; "
                  f"a robot will lay {rails_needed} rail and {field.drills} drills.")
         return True, f"field #{fid} planned on patch #{patch_id} ({patch.ore})"
+
+    # ---- home-ring anchors (keep loops from overlapping at home) ----------
+    def _home_anchor(self, fx: float, fy: float, ring: int) -> tuple[float, float]:
+        """Home turnaround anchor in the FIELD's own direction (so the loop is a
+        clean radial corridor that doesn't cross other directions), pushed onto a
+        farther ring for each EXTRA loop to the same field so duplicates don't
+        coincide. Same-direction DIFFERENT fields may still share a corridor; the
+        traffic interlock + anti-deadlock keep that flowing rather than colliding."""
+        ang = math.atan2(fy, fx)
+        radius = balance.HOME_RING + ring * balance.HOME_RING_BAY
+        return math.cos(ang) * radius, math.sin(ang) * radius
 
     # ---- construction jobs (robots lay the track + drills) ----------------
     def _new_job(self, field_id, x, y, edge_ids, legs, activates_field):
@@ -472,8 +506,9 @@ class Simulation:
         }
         if not self.economy.have(costs):
             return False, "insufficient materials for a second loop"
-        bay = len(field.station_ids) // 2          # extra loops sit on a farther ring
-        out_e, ret_e, load_st, unload_st = self.net.build_link(HOME, (patch.cx, patch.cy), bay)
+        ring = len(field.station_ids) // 2          # extra loops stack on outer rings
+        anchor = self._home_anchor(patch.cx, patch.cy, ring)
+        out_e, ret_e, load_st, unload_st = self.net.build_link(HOME, (patch.cx, patch.cy), anchor)
         load_st.field_id = field_id
         load_st.name = f"{patch.ore}-{field_id}-load2"
         unload_st.name = f"home-{field_id}-unload2"

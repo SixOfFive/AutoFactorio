@@ -651,6 +651,48 @@ def test_no_train_collisions_across_a_busy_run():
     assert s["stalled_trains"] == 0                   # no permanent stall
 
 
+def test_many_loops_keep_flowing_without_permanent_jam():
+    """Many loops to spread-out fields must keep delivering (no permanent gridlock)
+    and never overlap - the home loops fan out and the anti-deadlock guarantees the
+    network can't freeze."""
+    import math
+    sim = Simulation(Config())
+    sim.world.explored[:] = 1
+    for p in sim.world.patches:
+        p.discovered = True
+    chosen, used = [], []
+    for p in sorted(sim.world.claimable_patches(), key=lambda p: math.hypot(p.cx, p.cy)):
+        a = math.atan2(p.cy, p.cx)
+        if all(abs((a - b + math.pi) % (2 * math.pi) - math.pi) > math.radians(25) for b in used):
+            chosen.append(p)
+            used.append(a)
+        if len(chosen) >= 8:
+            break
+    for p in chosen:
+        for k in ("rail", "rail_signal", "chain_signal", "train_stop", "locomotive",
+                  "cargo_wagon", "electric_drill", "iron_plate", "steel_plate", "stone", "coal"):
+            sim.economy.inv[k] = 1_000_000
+        sim.build_field(p.id)
+    _settle(sim, max_s=120)
+    dt = 1 / 60
+    for _ in range(int(60 / dt)):                 # warm up
+        sim.tick(dt)
+    mid = sim.delivered_total
+    overlaps = 0
+    thr = (balance.ENTITY_WIDTH * 0.9) ** 2
+    for step in range(int(120 / dt)):
+        sim.tick(dt)
+        if step % 5 == 0:
+            poses = [t.car_poses() for t in sim.trains.values()]
+            for i in range(len(poses)):
+                for j in range(i + 1, len(poses)):
+                    if any((ax - bx) ** 2 + (ay - by) ** 2 < thr
+                           for (ax, ay, _a, _k) in poses[i] for (bx, by, _b, _l) in poses[j]):
+                        overlaps += 1
+    assert sim.delivered_total > mid + 1000, "network stopped delivering (permanent jam)"
+    assert overlaps == 0, f"trains overlapped {overlaps} times"
+
+
 def test_signal_aspect_goes_red_when_block_occupied():
     """Live signal aspects: a signal reads red while a train sits on the block it
     guards (so the rendered signals reflect real occupancy)."""

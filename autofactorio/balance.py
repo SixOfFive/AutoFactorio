@@ -132,15 +132,18 @@ JUNCTION_RADIUS = 9.0              # tiles around origin treated as the home cro
 JUNCTION_CLEAR = 1.5              # extra tiles the tail must pass before releasing
 JUNCTION_APPROACH = 7.0           # within this of the crossing a train requests the grant
 JUNCTION_STUCK_SECONDS = 2.0      # force-release the mutex if the holder can't progress
+UNJAM_SECONDS = 4.0               # a train held this long by traffic gets to push through
+                                  # (one at a time, highest priority) so a congested
+                                  # cluster can never PERMANENTLY deadlock
 
 # ---------------------------------------------------------------------------
 # Rail network
 # ---------------------------------------------------------------------------
-HOME_RING = 14                     # each loop's home turnaround sits this far from the
-                                   # HQ, out in its field's direction (so loops fan out
-                                   # from distinct points instead of all crossing at 0,0)
-HOME_RING_BAY = 6                  # extra ring distance per extra loop to the same field
-                                   # (add_train), so duplicate loops don't coincide
+HOME_RING = 14                     # each loop's home turnaround sits this far from the HQ,
+                                   # out in its field's direction (loops fan out instead of
+                                   # converging at 0,0 - the main collision fix)
+HOME_RING_BAY = 7                  # extra ring radius per EXTRA loop to the same field, so
+                                   # duplicate loops (add_train) don't coincide
 RAIL_GRID = 2                      # rail nodes snap to even tile coords on straights
 LANE_OFFSET = 10                   # gap between the two one-way lanes (tiles); also the
                                    # diameter of the U-turn loops, so trains never turn sharp

@@ -47,6 +47,7 @@ class Train:
         self.recall = False              # field decommissioned: return home and store
         self.locked: set[int] = set()
         self.holds_junction = False      # currently granted the home-junction mutex
+        self.blocked_time = 0.0          # seconds held still by traffic (anti-deadlock)
         # arc-length span of this leg that lies inside the home junction (or None)
         self.junc_enter: float | None = None
         self.junc_exit: float | None = None
@@ -131,9 +132,12 @@ class Train:
 
     # ---- movement ---------------------------------------------------------
     def update_movement(self, dt: float, net: RailNetwork, obstacles=None,
-                        hard_obstacles=None) -> None:
+                        hard_obstacles=None, ignore_traffic=False) -> None:
         if self.state != "moving":
             return
+        if ignore_traffic:                 # anti-deadlock: push through other traffic
+            obstacles = None
+            hard_obstacles = None
         if self.fuel_seconds <= 0:
             self.speed = 0.0
             self.stalled = True
@@ -145,6 +149,8 @@ class Train:
         self.speed = min(cap, self.speed + self.accel * dt)
         ds = self.speed * dt
         target = min(self.leg_len, self.head_s + ds)
+        region_waiting = False        # legitimately queued for the home-crossing mutex
+        traffic_blocked = False       # stopped by another train's car (possible deadlock)
 
         # block reservation: don't enter a block another train holds
         front_block_after = self._block_at(target)
@@ -161,12 +167,13 @@ class Train:
         # it gets within approach of the crossing - it does NOT creep up to the edge,
         # so the waiters stay spread around their stations instead of piling onto the
         # boundary and blocking the one train that does have the mutex.
-        if not self.holds_junction and self.junc_enter is not None \
+        if not self.holds_junction and not ignore_traffic and self.junc_enter is not None \
                 and self.head_s <= self.junc_exit + 1e-6:
             if self._in_region(net) or (self.junc_enter - self.head_s) <= balance.JUNCTION_APPROACH:
                 target = self.head_s
                 self.speed = 0.0
                 self.waiting_for_train = True
+                region_waiting = True
 
         # predictive yield: slow for higher-priority traffic ahead (so the lower
         # train gives way before a crossing rather than nosing into it).
@@ -180,6 +187,7 @@ class Train:
                     target = self.head_s
                     self.speed = 0.0
                     self.waiting_for_train = True
+                    traffic_blocked = True
                     break
 
         # hard collision guard: NEVER advance to within collision distance of any
@@ -194,11 +202,20 @@ class Train:
                     target = self.head_s
                     self.speed = 0.0
                     self.waiting_for_train = True
+                    traffic_blocked = True
                     break
 
         moved = target - self.head_s
         if moved > 0:
             self.fuel_seconds -= dt
+        # how long this train has been unable to make meaningful progress (used to
+        # pick which train to push through if the WHOLE network freezes - see
+        # Simulation's global no-progress detector).
+        if moved > 0.03:
+            self.blocked_time = 0.0
+        else:
+            self.blocked_time += dt
+        _ = (region_waiting, traffic_blocked)   # (flags reserved for future tuning)
         self.head_s = target
 
         # acquire blocks now under the body; only record ones we actually own,

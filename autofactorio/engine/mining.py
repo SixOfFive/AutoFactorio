@@ -26,6 +26,7 @@ class MiningField:
     # for track reclamation when the field is abandoned
     edge_ids: list = field(default_factory=list)
     station_ids: list = field(default_factory=list)
+    home_slots: list = field(default_factory=list)   # (ring, slot) home anchors this field owns
     rail_used: int = 0
     # lifecycle: constructing (a robot is laying track + drills) -> active ->
     # recalling (trains heading home to storage) -> dismantling -> removed

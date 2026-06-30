@@ -102,7 +102,7 @@ def save_game(sim, path: str) -> None:
              "load_station_id": f.load_station_id, "buffer": f.buffer,
              "buffer_cap": f.buffer_cap, "edge_ids": list(f.edge_ids),
              "station_ids": list(f.station_ids), "rail_used": f.rail_used,
-             "state": f.state}
+             "home_slots": [list(s) for s in f.home_slots], "state": f.state}
             for f in sim.fields.values()
         ],
         "trains": [
@@ -260,6 +260,7 @@ def load_into(sim, path: str) -> None:
                           sf["buffer"], sf["buffer_cap"])
         fld.edge_ids = list(sf.get("edge_ids", []))
         fld.station_ids = list(sf.get("station_ids", []))
+        fld.home_slots = [tuple(s) for s in sf.get("home_slots", [])]
         fld.rail_used = sf.get("rail_used", 0)
         fld.state = sf.get("state", "active")
         sim.fields[sf["id"]] = fld

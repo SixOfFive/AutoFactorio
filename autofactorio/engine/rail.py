@@ -199,7 +199,8 @@ class RailNetwork:
             kind = "chain" if (i == 0 and chain_at_start) else "rail"
             self.signals.setdefault(e.a, Signal(e.a, kind, self.node_pos(e.a)))
 
-    def build_link(self, home: tuple[int, int], field_pt: tuple[int, int], bay: int = 0):
+    def build_link(self, home: tuple[int, int], field_pt: tuple[int, int],
+                   home_anchor: tuple[float, float] | None = None):
         """Build one continuous, smooth, collision-free loop to a field.
 
         The loop has two one-way lanes joined by wide U-turns at each end, with all
@@ -212,20 +213,23 @@ class RailNetwork:
         Returns (legA_edges, legB_edges, load_station, unload_station).
         """
         g = balance.RAIL_GRID
-        dx, dy = field_pt[0] - home[0], field_pt[1] - home[1]
-        d = math.hypot(dx, dy) or 1.0
-        ux, uy = dx / d, dy / d                     # unit home->field
-        px, py = -uy, ux                            # perpendicular unit
         off = balance.LANE_OFFSET
 
-        # Anchor the loop's home end on a RING around the HQ, out in the field's
-        # own direction (instead of every loop converging on the origin). The home
-        # U-turn then sits on that side of the base, so loops to different fields
-        # fan out from distinct points and their track no longer all overlaps at
-        # the centre - the root cause of trains piling up / colliding at home.
-        ring = balance.HOME_RING + bay * balance.HOME_RING_BAY
-        home_a = (_snap(home[0] + ux * ring, g), _snap(home[1] + uy * ring, g))
+        # The loop's home end is anchored on a RING around the HQ at a DISTINCT slot
+        # (chosen by the Simulation so no two loops share home space - the fix for
+        # trains piling up / colliding at the centre). Fall back to the field's own
+        # direction if no anchor is supplied.
+        if home_anchor is None:
+            d0 = math.hypot(field_pt[0] - home[0], field_pt[1] - home[1]) or 1.0
+            home_anchor = (home[0] + (field_pt[0] - home[0]) / d0 * balance.HOME_RING,
+                           home[1] + (field_pt[1] - home[1]) / d0 * balance.HOME_RING)
+        home_a = (_snap(home_anchor[0], g), _snap(home_anchor[1], g))
         field_a = (_snap(field_pt[0], g), _snap(field_pt[1], g))
+        # lane direction runs from the home anchor out to the field
+        dx, dy = field_a[0] - home_a[0], field_a[1] - home_a[1]
+        d = math.hypot(dx, dy) or 1.0
+        ux, uy = dx / d, dy / d                     # unit home_anchor->field
+        px, py = -uy, ux                            # perpendicular unit
         home_b = (_snap(home_a[0] + px * off, g), _snap(home_a[1] + py * off, g))
         field_b = (_snap(field_a[0] + px * off, g), _snap(field_a[1] + py * off, g))
 
