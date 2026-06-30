@@ -175,28 +175,6 @@ class RailNetwork:
         return b
 
     # ---- lane construction ------------------------------------------------
-    def _lattice_path(self, start: tuple[int, int], end: tuple[int, int]) -> list[tuple[int, int]]:
-        """Corners of a diagonal-then-straight route on the 2-tile lattice."""
-        g = balance.RAIL_GRID
-        sx, sy = _snap(start[0], g), _snap(start[1], g)
-        ex, ey = _snap(end[0], g), _snap(end[1], g)
-        pts = [(sx, sy)]
-        x, y = sx, sy
-        guard = 0
-        while (x, y) != (ex, ey) and guard < 10000:
-            guard += 1
-            dx = _sign(ex - x) * g
-            dy = _sign(ey - y) * g
-            if x != ex and y != ey:
-                x += dx; y += dy           # diagonal
-            elif x != ex:
-                x += dx                    # straight horizontal
-            else:
-                y += dy                    # straight vertical
-            pts.append((x, y))
-        # compress collinear runs into corners
-        return _corners(pts)
-
     def _add_edge_poly(self, a: int, b: int, points: list[tuple[float, float]]) -> int:
         pts = [tuple(map(float, p)) for p in points]
         length = sum(math.dist(pts[i - 1], pts[i]) for i in range(1, len(pts)))
@@ -358,15 +336,16 @@ class RailNetwork:
 
         ux, uy = math.cos(tk.bearing), math.sin(tk.bearing)
         px, py = -uy, ux
-        fa = (_snap(field_pt[0], g), _snap(field_pt[1], g))                       # load point
-        fb = (_snap(field_pt[0] + px * off, g), _snap(field_pt[1] + py * off, g))  # U-turn end
-        bdx, bdy = fa[0] - out_pos[0], fa[1] - out_pos[1]
-        bd = math.hypot(bdx, bdy) or 1.0
-        bulge = (bdx / bd, bdy / bd)
-        sid_out_poly = _round_corners(self._lattice_path(out_pos, fa), balance.CURVE_RADIUS)
-        sid_in_poly = _round_corners(self._lattice_path(fb, in_pos), balance.CURVE_RADIUS)
-        field_uturn = _arc(fa, fb, bulge)
-        sid_out = self._polyline_to_edges(sid_out_poly)            # spine -> fa (load)
+        fa = (float(field_pt[0]), float(field_pt[1]))                       # load point
+        fb = (field_pt[0] + px * off, field_pt[1] + py * off)               # U-turn end
+        # The siding peels off / rejoins the spine TANGENT to it (along +/-u), and the
+        # field turnaround is a half-loop tangent to +/-u too, so every join is smooth:
+        #   out spine (heading +u) -> sid_out -> fa -> field balloon -> fb -> sid_in ->
+        #   in spine (heading -u). No sharp corners anywhere.
+        sid_out_poly = _hermite(out_pos, (ux, uy), fa, (ux, uy))           # spine -> fa (load)
+        field_uturn = _arc(fa, fb, (ux, uy))                               # fa -> fb, tangent +/-u
+        sid_in_poly = _hermite(fb, (-ux, -uy), in_pos, (-ux, -uy))         # fb -> in spine
+        sid_out = self._polyline_to_edges(sid_out_poly)
         sid_in = self._polyline_to_edges(field_uturn[:-1] + sid_in_poly)   # fa -> fb -> spine
         self._signalize(sid_out)
         self._signalize(sid_in)
@@ -484,36 +463,22 @@ class RailNetwork:
         return sum(e.length for e in self.edges.values())
 
 
-def _round_corners(pts, radius: float, step: float = 2.0):
-    """Fillet each interior corner with a quadratic Bezier (tangent to both
-    segments) so the polyline has no sharp angles. Trim distance is clamped to
-    half of each adjacent segment so consecutive fillets never overlap."""
-    pts = [tuple(map(float, p)) for p in pts]
-    if len(pts) < 3:
-        return pts
-    out = [pts[0]]
-    for i in range(1, len(pts) - 1):
-        ax, ay = pts[i - 1]
-        bx, by = pts[i]
-        cx, cy = pts[i + 1]
-        l1 = math.hypot(ax - bx, ay - by)
-        l2 = math.hypot(cx - bx, cy - by)
-        if l1 < 1e-6 or l2 < 1e-6:
-            out.append((bx, by))
-            continue
-        dd = min(radius, l1 * 0.5, l2 * 0.5)
-        p1 = (bx + (ax - bx) / l1 * dd, by + (ay - by) / l1 * dd)
-        p2 = (bx + (cx - bx) / l2 * dd, by + (cy - by) / l2 * dd)
-        out.append(p1)
-        n = max(2, int(dd * 2 / step))
-        for k in range(1, n):
-            t = k / n
-            mt = 1 - t
-            out.append((mt * mt * p1[0] + 2 * mt * t * bx + t * t * p2[0],
-                        mt * mt * p1[1] + 2 * mt * t * by + t * t * p2[1]))
-        out.append(p2)
-    out.append(pts[-1])
-    return out
+def _hermite(p0, t0, p1, t1, samples: int = 18):
+    """Smooth cubic curve from p0 to p1 leaving along unit tangent t0 and arriving
+    along unit tangent t1 (a Bezier with the tangents as control handles). Used for
+    turnouts/sidings so they peel off and rejoin the straight spine TANGENTIALLY -
+    no sharp corner where a siding meets the main line."""
+    k = max(2.0, math.dist(p0, p1) * 0.5)
+    c0 = (p0[0] + t0[0] * k, p0[1] + t0[1] * k)
+    c1 = (p1[0] - t1[0] * k, p1[1] - t1[1] * k)
+    pts = []
+    for i in range(samples + 1):
+        t = i / samples
+        mt = 1.0 - t
+        a, b, c, d = mt * mt * mt, 3 * mt * mt * t, 3 * mt * t * t, t * t * t
+        pts.append((a * p0[0] + b * c0[0] + c * c1[0] + d * p1[0],
+                    a * p0[1] + b * c0[1] + c * c1[1] + d * p1[1]))
+    return pts
 
 
 def _arc(p_from, p_to, bulge_unit, samples: int = 16):
@@ -534,22 +499,3 @@ def _arc(p_from, p_to, bulge_unit, samples: int = 16):
 
 def _snap(v: float, g: int) -> int:
     return int(round(v / g)) * g
-
-
-def _sign(v: float) -> int:
-    return (v > 0) - (v < 0)
-
-
-def _corners(pts: list[tuple[int, int]]) -> list[tuple[int, int]]:
-    if len(pts) <= 2:
-        return pts
-    out = [pts[0]]
-    for i in range(1, len(pts) - 1):
-        ax, ay = pts[i - 1]
-        bx, by = pts[i]
-        cx, cy = pts[i + 1]
-        # keep the point only if direction changes
-        if (bx - ax, by - ay) != (cx - bx, cy - by):
-            out.append(pts[i])
-    out.append(pts[-1])
-    return out
