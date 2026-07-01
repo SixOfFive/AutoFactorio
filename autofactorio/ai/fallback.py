@@ -98,6 +98,11 @@ def decide(sim, report) -> dict:
             p = next((p for p in patches if p.ore == ore), None)
             if p:
                 try_claim(p, f"secure {ore.replace('_', ' ')}")
+    # coal now powers the whole base (and trains) - grab MORE coal under fuel pressure
+    if eco.inv.get("coal", 0) < balance.FUEL_CRITICAL * 4 or eco.power_factor < 0.95:
+        p = next((p for p in patches if p.ore == "coal" and p.id not in claimed), None)
+        if p:
+            try_claim(p, "more coal for power")
     for p in sorted(patches, key=lambda q: (ore_fields.get(q.ore, 0), _dist(q))):
         try_claim(p, f"expand {p.ore.replace('_', ' ')} #{p.id}")
 

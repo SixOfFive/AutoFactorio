@@ -28,7 +28,7 @@ from ..ai.director import Director
 from .assets import Assets
 from .camera import Camera
 from .renderer import Renderer
-from .hud import Hud
+from .hud import Hud, _fmt_time
 from .console import Console
 from .minimap import Minimap
 
@@ -278,9 +278,21 @@ class App:
         lines.append((f"Robots: {len(self.sim.robots)}/{self.sim.research.max_robots}"
                       f"     Research: Tech L{self.sim.research.level}", False))
         lines.append(("", False))
+        # POWER: buildings burn fuel to run; show supply vs demand, burn rate, and how
+        # long the fuel in stock lasts with no refills.
+        lines.append(("POWER", True))
+        low = eco.power_factor < 0.99
+        lines.append((f"  Generation {eco.power_supplied:.1f} / demand {eco.power_demand:.1f} e/s"
+                      + ("   LOW POWER!" if low else ""), False))
+        tte = eco.seconds_to_empty()
+        tte_str = "never" if tte == float("inf") else _fmt_time(tte)
+        lines.append((f"  Burning {eco.fuel_rate:.1f}/s {balance.DISPLAY_NAME.get(eco.burning, eco.burning)}"
+                      f"   empty in {tte_str}", False))
+        lines.append(("", False))
         lines.append(("STORAGE", True))
         order = ["iron_ore", "copper_ore", "stone", "iron_plate", "copper_plate",
-                 "steel_plate", "stone_brick", "coal", "solid_fuel", "rocket_fuel",
+                 "steel_plate", "stone_brick", "coal",
+                 "compressed_coal", "refined_fuel", "nuclear_fuel", "fusion_fuel",
                  "electronic_circuit", "iron_gear",
                  "science_pack", "rail", "rail_signal", "chain_signal", "train_stop",
                  "burner_drill", "electric_drill", "stone_furnace", "assembler",

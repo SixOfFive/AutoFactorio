@@ -324,45 +324,57 @@ def test_train_crushes_animal_and_takes_damage():
     assert t.hp < hp_before
 
 
-def test_coal_converts_to_processed_fuels():
-    """Surplus coal is converted up the fuel chain (coal -> solid -> rocket), while
-    a coal reserve is kept for direct burning and rocket fuel needs its tech."""
+def test_coal_refines_up_the_fuel_ladder():
+    """Surplus coal is refined up the ladder (coal -> compressed -> refined), while a
+    raw-coal reserve is kept as the always-available base fuel."""
     sim = Simulation(Config())
-    sim.research.level = balance.ROCKET_FUEL_TECH      # unlock rocket fuel
-    sim._sync_research()
     eco = sim.economy
-    eco.inv["coal"] = 8000
-    eco.inv["steel_plate"] = 200
-    for _ in range(int(60 / (1 / 60))):
+    eco.inv["coal"] = 40000
+    for _ in range(int(120 / (1 / 60))):
         eco.update(1 / 60)
-    assert eco.inv.get("solid_fuel", 0) > 0
-    assert eco.inv.get("rocket_fuel", 0) > 0
+    assert eco.inv.get("compressed_coal", 0) > 0
+    assert eco.inv.get("refined_fuel", 0) > 0
     assert eco.inv["coal"] >= balance.FUEL_COAL_RESERVE   # reserve kept for burning
 
 
-def test_rocket_fuel_needs_its_tech():
+def test_top_fuel_tiers_need_tech():
+    # locked: even with refined fuel on hand, nuclear/fusion can't be refined
     sim = Simulation(Config())
-    sim.research.level = 0                              # rocket fuel NOT unlocked
+    sim.research.level = 0
     sim._sync_research()
     eco = sim.economy
-    eco.inv["coal"] = 8000
-    eco.inv["steel_plate"] = 200
+    eco.inv["coal"] = 40000
+    eco.inv["refined_fuel"] = 400
+    eco.inv["steel_plate"] = 800
     for _ in range(int(40 / (1 / 60))):
         eco.update(1 / 60)
-    assert eco.inv.get("solid_fuel", 0) > 0            # basic fuel always available
-    assert eco.inv.get("rocket_fuel", 0) == 0          # rocket fuel gated by research
+    assert eco.inv.get("compressed_coal", 0) > 0       # base refining always available
+    assert eco.inv.get("nuclear_fuel", 0) == 0         # gated by research
+    assert eco.inv.get("fusion_fuel", 0) == 0
+    # unlocked: nuclear fuel now gets refined from the refined-fuel stock
+    sim2 = Simulation(Config())
+    sim2.research.level = balance.NUCLEAR_FUEL_TECH
+    sim2._sync_research()
+    e2 = sim2.economy
+    e2.inv["coal"] = 40000
+    e2.inv["refined_fuel"] = 400
+    e2.inv["steel_plate"] = 800
+    for _ in range(int(60 / (1 / 60))):
+        e2.update(1 / 60)
+    assert e2.inv.get("nuclear_fuel", 0) > 0
 
 
 def test_best_available_fuel_prefers_denser():
     eco = Simulation(Config()).economy
+    eco.inv.clear()
     eco.inv["coal"] = 100
     assert eco.best_available_fuel()[0] == "coal"
-    eco.inv["solid_fuel"] = 10
-    assert eco.best_available_fuel()[0] == "solid_fuel"
-    eco.inv["rocket_fuel"] = 1
+    eco.inv["compressed_coal"] = 10
+    assert eco.best_available_fuel()[0] == "compressed_coal"
+    eco.inv["fusion_fuel"] = 1
     fuel, burn = eco.best_available_fuel()
-    assert fuel == "rocket_fuel"
-    assert burn == balance.FUEL_BURN["rocket_fuel"]    # efficiency mult is 1.0 at L0
+    assert fuel == "fusion_fuel"
+    assert burn == balance.FUEL_BURN["fusion_fuel"]    # efficiency mult is 1.0 at L0
 
 
 def test_better_fuel_gives_longer_train_range():
@@ -377,13 +389,13 @@ def test_better_fuel_gives_longer_train_range():
     t.fuel_seconds = 0.0
     sim._refuel(t)
     coal_range = t.fuel_seconds
-    # rocket fuel tops the same loco to a much longer range
+    # fusion fuel tops the same loco to a vastly longer range
     eco.inv.clear()
-    eco.inv["rocket_fuel"] = 1000
+    eco.inv["fusion_fuel"] = 1000
     t.fuel_seconds = 0.0
     sim._refuel(t)
-    rocket_range = t.fuel_seconds
-    assert rocket_range > coal_range * 5               # far more run-seconds per loco
+    fusion_range = t.fuel_seconds
+    assert fusion_range > coal_range * 5               # far more run-seconds per loco
 
 
 def test_fuel_efficiency_research_scales_burn():
@@ -393,7 +405,58 @@ def test_fuel_efficiency_research_scales_burn():
     assert sim.research.fuel_efficiency > 1.5          # research makes fuel last longer
     sim._sync_research()
     assert sim.economy.research_fuel_mult == sim.research.fuel_efficiency
-    assert sim.economy.rocket_fuel_unlocked is True
+    assert sim.economy.nuclear_fuel_unlocked is True
+    assert sim.economy.fusion_fuel_unlocked is True
+
+
+# ---- power: buildings burn fuel to run ------------------------------------
+def test_buildings_need_power_and_stall_without_fuel():
+    """Factories draw power from fuel; with fuel they run, with none they stall."""
+    eco = Simulation(Config()).economy
+    eco.inv.clear()
+    eco.inv["iron_ore"] = 5000
+    eco.inv["coal"] = 5000                              # fuel present -> powered
+    before = eco.total_smelted
+    for _ in range(int(3 / (1 / 60))):
+        eco.update(1 / 60)
+    assert eco.power_factor == 1.0
+    assert eco.total_smelted > before                  # smelting ran
+
+    eco.inv["coal"] = 0                                 # cut ALL fuel
+    eco.inv["compressed_coal"] = eco.inv["refined_fuel"] = 0
+    eco.inv["iron_ore"] = 5000
+    eco._energy_bank = 0.0
+    mid = eco.total_smelted
+    for _ in range(int(3 / (1 / 60))):
+        eco.update(1 / 60)
+    assert eco.power_factor == 0.0                      # no fuel -> unpowered
+    assert eco.total_smelted == mid                     # buildings disabled: nothing smelted
+
+
+def test_refined_fuel_powers_far_longer_than_coal():
+    """The same number of units of a refined fuel powers the base much longer than coal
+    (coal is penalized), and time-to-empty reflects the fuel in stock."""
+    eco = Simulation(Config()).economy
+    eco.inv.clear()
+    eco.inv["coal"] = 100
+    eco.update(1 / 60)                                  # establish demand + burn
+    coal_secs = eco.seconds_to_empty()
+    eco.inv.clear()
+    eco.inv["refined_fuel"] = 100
+    eco.update(1 / 60)
+    refined_secs = eco.seconds_to_empty()
+    assert refined_secs > coal_secs * 10               # refined lasts vastly longer
+    assert eco.power_demand > 0 and 0 < coal_secs < float("inf")
+
+
+def test_power_status_in_stats():
+    sim = Simulation(Config())
+    sim.tick(1 / 60)
+    s = sim.stats()
+    for k in ("power_demand", "power_supplied", "power_factor", "fuel_rate",
+              "burning", "fuel_seconds_left"):
+        assert k in s
+    assert s["power_demand"] > 0                        # the starting base draws power
 
 
 def test_robot_refuels_stalled_train():

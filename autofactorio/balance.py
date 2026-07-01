@@ -32,9 +32,13 @@ RECIPES = {
     "engine_unit":        {"in": {"iron_gear": 1, "steel_plate": 1, "iron_plate": 2}, "out": {"engine_unit": 1}, "time": 2.0},
     # research currency: the factory makes science from surplus; research spends it
     "science_pack":       {"in": {"electronic_circuit": 1, "iron_plate": 1, "copper_plate": 1}, "out": {"science_pack": 1}, "time": 1.0},
-    # processed fuels: convert surplus coal into ever denser train fuel (see FUEL_BURN)
-    "solid_fuel":         {"in": {"coal": 3},                                "out": {"solid_fuel": 1},         "time": 1.0},
-    "rocket_fuel":        {"in": {"solid_fuel": 5, "steel_plate": 1},        "out": {"rocket_fuel": 1},        "time": 4.0},
+    # fuel refining: coal climbs the ladder into ever-denser fuel (see FUEL_BURN/FUEL_POWER).
+    # Each step yields far more energy per unit than the coal it consumed, so refining is
+    # strongly worth it (raw coal is power-penalized). Top two tiers are tech-gated.
+    "compressed_coal":    {"in": {"coal": 3},                                "out": {"compressed_coal": 1},    "time": 1.0},
+    "refined_fuel":       {"in": {"compressed_coal": 3},                     "out": {"refined_fuel": 1},       "time": 2.0},
+    "nuclear_fuel":       {"in": {"refined_fuel": 4, "steel_plate": 1},      "out": {"nuclear_fuel": 1},       "time": 4.0},
+    "fusion_fuel":        {"in": {"nuclear_fuel": 4, "electronic_circuit": 2}, "out": {"fusion_fuel": 1},      "time": 6.0},
     # buildables
     "rail":          {"in": {"iron_stick": 1, "steel_plate": 1, "stone": 1},                       "out": {"rail": 2},          "time": 0.5},
     "rail_signal":   {"in": {"electronic_circuit": 1, "iron_plate": 5},                            "out": {"rail_signal": 1},   "time": 0.5},
@@ -63,7 +67,8 @@ DISPLAY_NAME = {
     "train_stop": "Train stop", "electric_drill": "Electric drill", "burner_drill": "Burner drill",
     "stone_furnace": "Furnace", "assembler": "Assembler", "locomotive": "Locomotive",
     "cargo_wagon": "Cargo wagon", "science_pack": "Science", "robot": "Robot",
-    "solid_fuel": "Solid fuel", "rocket_fuel": "Rocket fuel",
+    "compressed_coal": "Compressed coal", "refined_fuel": "Fuel",
+    "nuclear_fuel": "Nuclear fuel", "fusion_fuel": "Fusion fuel",
 }
 
 # ---------------------------------------------------------------------------
@@ -99,17 +104,40 @@ ENTITY_WIDTH = 1.5                 # drawn car width in tiles
 COUPLING = 1                       # tile gap between cars
 MAX_TRAIN_LEN = 15                 # 1 loco + 2 wagons + couplings (used for block spacing)
 
-COAL_BURN_SECONDS = 6.67           # run-seconds added per 1 coal
+COAL_BURN_SECONDS = 6.67           # train run-seconds added per 1 coal (base tier)
 LOCO_FUEL_SLOTS = 3                # fuel units a loco holds (capacity = slots * burn)
 LOCO_START_FUEL = 3               # coal a freshly-built loco carries
 
-# Fuel tiers: the base converts surplus coal into denser fuels (RECIPES above), and
-# trains burn the BEST available - each unit gives far more run-seconds, so a loco
-# refuelled with rocket fuel goes much further between stops. burn = run-seconds/unit.
-FUEL_BURN = {"coal": COAL_BURN_SECONDS, "solid_fuel": 24.0, "rocket_fuel": 150.0}
-FUEL_ORDER = ["rocket_fuel", "solid_fuel", "coal"]   # best first (trains draw in this order)
-FUEL_COAL_RESERVE = 250            # keep this much coal before converting it to fuel
-ROCKET_FUEL_TECH = 20              # tech level that unlocks rocket-fuel processing
+# ---------------------------------------------------------------------------
+# Fuel & power: ONE refinement ladder powers BOTH trains and buildings
+# ---------------------------------------------------------------------------
+# Coal is refined up the chain coal -> compressed_coal -> refined_fuel ->
+# nuclear_fuel -> fusion_fuel (the top two unlocked by tech). Each tier packs FAR more
+# energy per unit - both train run-seconds (FUEL_BURN) and building power (FUEL_POWER) -
+# so refined fuel "lasts long and gives much more". RAW COAL is PENALIZED: burnt
+# directly it yields only half its notional energy as power, which is the whole point
+# of refining. Trains and factories both draw the DENSEST fuel in stock first.
+FUEL_TIERS = ["coal", "compressed_coal", "refined_fuel", "nuclear_fuel", "fusion_fuel"]
+FUEL_ORDER = ["fusion_fuel", "nuclear_fuel", "refined_fuel", "compressed_coal", "coal"]  # best first
+FUEL_BURN = {                      # train run-seconds per unit (big jumps per tier)
+    "coal": COAL_BURN_SECONDS, "compressed_coal": 24.0, "refined_fuel": 90.0,
+    "nuclear_fuel": 400.0, "fusion_fuel": 2000.0,
+}
+COAL_POWER_PENALTY = 0.5           # raw coal yields only HALF its energy as building power
+FUEL_POWER = {                     # building energy per unit (coal already penalized -50%)
+    "coal": 1.0 * COAL_POWER_PENALTY, "compressed_coal": 4.0, "refined_fuel": 16.0,
+    "nuclear_fuel": 80.0, "fusion_fuel": 400.0,
+}
+FUEL_COAL_RESERVE = 200            # keep this much raw coal unrefined (the always-available
+                                   # base fuel that bootstraps power when refined runs out)
+NUCLEAR_FUEL_TECH = 50             # tech level that unlocks nuclear-fuel refining
+FUSION_FUEL_TECH = 120             # ...and fusion-fuel refining
+
+# Buildings draw POWER from fuel to run. If supply can't meet demand they run at reduced
+# capacity, and at zero fuel they shut off entirely. Demand scales with how many you've
+# built, so a sprawling factory needs a big - ideally refined - fuel supply.
+POWER_PER_FURNACE = 0.05           # energy/sec a furnace draws to run
+POWER_PER_ASSEMBLER = 0.15         # energy/sec an assembler draws to run
 
 
 def fuel_efficiency(level: int) -> float:
@@ -225,8 +253,8 @@ STOCK_TARGETS = {
     "stone_furnace": 30, "locomotive": 8, "cargo_wagon": 16,
     "science_pack": 120,    # accumulate research currency from surplus production
     "robot": 3,             # keep robots ready to deploy up to the research cap
-    "solid_fuel": 250,      # convert surplus coal into denser train fuel...
-    "rocket_fuel": 80,      # ...and the densest tier once it's unlocked by research
+    # refine coal up the fuel ladder for power + train range (top tiers tech-gated):
+    "compressed_coal": 250, "refined_fuel": 150, "nuclear_fuel": 80, "fusion_fuel": 40,
 }
 
 # ---------------------------------------------------------------------------
@@ -244,8 +272,8 @@ STORAGE_CAP_START = {
     "iron_ore": 2500, "copper_ore": 2500, "coal": 2500, "stone": 2500,
     # smelted plates
     "iron_plate": 600, "copper_plate": 500, "steel_plate": 300, "stone_brick": 300,
-    # processed fuels (denser than coal, so smaller caps go a long way)
-    "solid_fuel": 400, "rocket_fuel": 120,
+    # refined fuels (denser than coal, so smaller caps go a long way)
+    "compressed_coal": 400, "refined_fuel": 200, "nuclear_fuel": 100, "fusion_fuel": 60,
     # research currency
     "science_pack": 120,
     # buildables (generous caps so the deep deployable bench above can actually be held)
@@ -259,7 +287,7 @@ STORAGE_CAP_START = {
 STORAGE_CAP_STEP = {
     "iron_ore": 2000, "copper_ore": 2000, "coal": 2000, "stone": 2000,
     "iron_plate": 400, "copper_plate": 300, "steel_plate": 200, "stone_brick": 200,
-    "solid_fuel": 250, "rocket_fuel": 80,
+    "compressed_coal": 250, "refined_fuel": 150, "nuclear_fuel": 80, "fusion_fuel": 40,
     "science_pack": 60,
     "rail": 200, "rail_signal": 30, "chain_signal": 15, "train_stop": 15,
     "burner_drill": 15, "electric_drill": 15, "stone_furnace": 15, "assembler": 10,

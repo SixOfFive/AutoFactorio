@@ -12,6 +12,7 @@ from .. import balance
 
 _INV_KEYS = [
     "iron_plate", "copper_plate", "steel_plate", "stone", "coal",
+    "compressed_coal", "refined_fuel", "nuclear_fuel", "fusion_fuel",
     "rail", "rail_signal", "train_stop", "electric_drill", "burner_drill",
     "stone_furnace", "assembler", "locomotive", "cargo_wagon",
 ]
@@ -71,6 +72,11 @@ def build_report(sim) -> dict:
         flags.append("WILDLIFE_PRESSURE")
     if eco.inv.get("coal", 0) < 150:
         flags.append("LOW_COAL")
+    if eco.power_factor < 0.9:
+        flags.append("LOW_POWER")               # factories fuel-starved -> get/refine coal
+    _tte = eco.seconds_to_empty()
+    if _tte < 120:
+        flags.append("LOW_FUEL")                # < 2 min of building power left in stock
     if s["stalled_trains"]:
         flags.append("TRAINS_STALLED_NO_FUEL")
     if not patches:
@@ -99,6 +105,15 @@ def build_report(sim) -> dict:
             "smelted_total": eco.total_smelted,
             "crafted_total": eco.total_crafted,
             "ore_delivered_total": sim.delivered_total,
+        },
+        "power": {
+            "demand": round(eco.power_demand, 1),        # energy/sec buildings need
+            "supplied": round(eco.power_supplied, 1),    # energy/sec fuel is providing
+            "factor": round(eco.power_factor, 2),        # <1 => factories throttled
+            "burning": eco.burning,                       # current fuel tier being consumed
+            "seconds_left": (None if _tte == float("inf") else int(_tte)),
+            "nuclear_unlocked": eco.nuclear_fuel_unlocked,
+            "fusion_unlocked": eco.fusion_fuel_unlocked,
         },
         "fields": fields,
         "available_patches": patches,

@@ -67,10 +67,15 @@ Do as MUCH as you can afford EVERY turn: emit MANY actions (typically 4-8), not 
 Never "wait" if anything useful is affordable.
 
 Each turn, in priority order:
-1. SAFETY: abandon ONLY fields with "depleted":true (recovers their train). If
-   NO_COAL_FIELD/LOW_COAL, claim a coal patch (coal fuels trains - never run dry).
-   Secure iron early. If STORAGE_FULL, build_storage for EACH item in "storage_full".
-   Build a robot on WILDLIFE_PRESSURE/DAMAGED_TRAINS when robots.can_build.
+1. SAFETY: abandon ONLY fields with "depleted":true (recovers their train). COAL IS
+   CRITICAL - it fuels trains AND powers every building (factories throttle/shut down
+   without fuel). On NO_COAL_FIELD / LOW_COAL / LOW_POWER / LOW_FUEL, claim coal
+   patch(es) at once so supply never runs dry. (The base auto-refines coal up the
+   power ladder - compressed coal -> fuel -> nuclear -> fusion - for far more energy
+   per unit; you just keep coal coming and RESEARCH to unlock the nuclear/fusion tiers,
+   see power.nuclear_unlocked/fusion_unlocked.) Secure iron early. If STORAGE_FULL,
+   build_storage for EACH item in "storage_full". Build a robot on WILDLIFE_PRESSURE/
+   DAMAGED_TRAINS when robots.can_build.
 2. EXPAND HARD: claim EVERY patch with "affordable":true this turn (multiple
    build_field actions), favoring ore types you have fewest of. Add a train
    (add_train) to any field with "buffer_full":true. Add drills (expand_drills) to

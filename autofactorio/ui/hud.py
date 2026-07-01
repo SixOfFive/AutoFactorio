@@ -48,6 +48,10 @@ INFO = {
     "trains": ("Trains", "Locomotives hauling ore from fields to the base on one-way loops."),
     "rail_stat": ("Rail network", "Total length of track currently laid, in tiles."),
     "delivered": ("Ore delivered", "Total ore unloaded at the base so far."),
+    "power": ("Power", "Buildings burn fuel to run: generation / demand (energy/sec) and how "
+                       "long the fuel in stock lasts with no refills. Refined fuel gives far "
+                       "more power than raw coal (coal is penalized 50%). Turns red and factories "
+                       "slow down when supply can't meet demand — keep coal coming and refine it."),
     "robots": ("Robots", "Up to 3. They build/dismantle fields, repair trains, fight wildlife, "
                          "gather emergency fuel and explore."),
     "animals": ("Wildlife", "Herds that wander and can spawn in the fog. Robots cull them and "
@@ -112,12 +116,16 @@ class Hud:
         s = sim.stats()
         nxt = sim.research.next_tech()
         tech = f"Tech L{s['tech_level']}" + (f"→{nxt['name']}" if nxt else " (max)")
+        tte = s.get("fuel_seconds_left", float("inf"))
+        tte_s = "∞" if tte == float("inf") else _fmt_time(tte)
+        low_power = s.get("power_factor", 1.0) < 0.99
         segs = [
             (f"Time {_fmt_time(sim.time)}", "time"),
             (f"Fields {s['fields']}", "fields"),
             (f"Trains {s['trains']}", "trains"),
             (f"Rail {_fmt(s['rail_tiles'])}t", "rail_stat"),
             (f"Delivered {_fmt(s['delivered'])}", "delivered"),
+            (f"Power {s.get('power_supplied', 0):.0f}/{s.get('power_demand', 0):.0f} ({tte_s})", "power"),
             (f"Robots {s['robots']}/{s['max_robots']}", "robots"),
             (f"Animals {s['animals']} (killed {_fmt(s['kills'])})", "animals"),
             (tech, "tech"),
@@ -126,7 +134,8 @@ class Hud:
             segs.append((f"Ships {_fmt(s['ships_launched'])}", "ships"))
         x = 12
         for text, key in segs:
-            surf = self.small.render(text, True, DIM)
+            color = BAD if (key == "power" and low_power) else DIM
+            surf = self.small.render(text, True, color)
             screen.blit(surf, (x, 34))
             self._zones.append((pygame.Rect(x, 32, surf.get_width(), 18), key))
             x += surf.get_width() + 16
@@ -160,9 +169,14 @@ class Hud:
         screen.blit(ds, (dx, 38))
         self._zones.append((pygame.Rect(dx, 36, ds.get_width(), 18), "director"))
 
+        warns = []
         if s["stalled_trains"]:
-            warn = self.small.render(f"⚠ {s['stalled_trains']} train(s) out of fuel", True, BAD)
-            screen.blit(warn, (w // 2 - warn.get_width() // 2, 50))
+            warns.append(f"⚠ {s['stalled_trains']} train(s) out of fuel")
+        if low_power:
+            warns.append(f"⚠ LOW POWER — factories at {int(s.get('power_factor', 1) * 100)}%; feed the base fuel")
+        for i, wtext in enumerate(warns):
+            warn = self.small.render(wtext, True, BAD)
+            screen.blit(warn, (w // 2 - warn.get_width() // 2, 50 + i * 16))
 
         if detailed:
             self._panel(screen, sim, director)

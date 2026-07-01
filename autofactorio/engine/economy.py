@@ -30,9 +30,11 @@ _BUILD_ORDER = [
                                                # copper-free fallback miner for expansion;
                                                # robot kept ahead of the steel-hungry
     "assembler", "cargo_wagon", "locomotive",  # rolling stock so it actually gets made
-    "solid_fuel", "rocket_fuel",  # convert surplus coal into denser train fuel
+    # refine coal up the fuel ladder for building POWER + train range (top tiers gated):
+    "compressed_coal", "refined_fuel", "nuclear_fuel", "fusion_fuel",
     "science_pack",     # made from surplus circuits/plates; fuels research
 ]
+_FUEL_CHAIN = ("compressed_coal", "refined_fuel", "nuclear_fuel", "fusion_fuel")
 _IRON_RESERVE_FOR_STEEL = 40       # keep this many iron plates before making steel
 _SMELT_BANK_CAP = 64.0             # max furnace-seconds banked
 _CRAFT_BANK_CAP = 16.0             # max assembler-seconds banked
@@ -59,7 +61,15 @@ class Economy:
         self.research_craft_mult = 1.0      # crafting speed
         self.research_storage_mult = 1.0    # storage capacity (scales every cap)
         self.research_fuel_mult = 1.0       # fuel-efficiency (run-seconds per fuel unit)
-        self.rocket_fuel_unlocked = False   # rocket-fuel processing researched yet?
+        self.nuclear_fuel_unlocked = False  # nuclear-fuel refining researched yet?
+        self.fusion_fuel_unlocked = False   # fusion-fuel refining researched yet?
+        # power: buildings burn fuel to run; these are refreshed each tick by update()
+        self._energy_bank = 0.0             # buffered energy from burnt fuel
+        self.power_demand = 0.0             # energy/sec all buildings want
+        self.power_supplied = 0.0           # energy/sec actually delivered (<= demand)
+        self.power_factor = 1.0             # supplied/demand this tick (1 = fully powered)
+        self.fuel_rate = 0.0                # fuel UNITS/sec being burnt (smoothed, for HUD)
+        self.burning = "coal"               # which fuel tier is currently being burnt
         self.total_smelted = 0
         self.total_crafted = 0
 
@@ -126,18 +136,66 @@ class Economy:
                 return f, balance.FUEL_BURN[f] * self.research_fuel_mult
         return None, 0.0
 
+    # ---- power ------------------------------------------------------------
+    def power_status(self, dt: float) -> float:
+        """Draw the tick's power from fuel and return the power FACTOR (0..1): how much
+        of the buildings' demand the available fuel can meet. Burns the DENSEST fuel in
+        stock first (coal is a poor, penalized last resort), buffering energy so whole
+        units aren't wasted. At 0 factor the base has no fuel and everything is off."""
+        self.power_demand = (self.furnaces * balance.POWER_PER_FURNACE
+                             + self.assemblers * balance.POWER_PER_ASSEMBLER)
+        need = self.power_demand * dt
+        if need <= 0:
+            self.power_factor = 1.0
+            self.power_supplied = 0.0
+            self.fuel_rate = 0.0
+            return 1.0
+        burnt_units = 0.0
+        while self._energy_bank < need:
+            fuel = next((f for f in balance.FUEL_ORDER if self.inv.get(f, 0) > 0), None)
+            if fuel is None:
+                break                                    # out of fuel
+            self.inv[fuel] -= 1
+            self._energy_bank += balance.FUEL_POWER[fuel] * self.research_fuel_mult
+            burnt_units += 1
+            self.burning = fuel
+        factor = 1.0 if self._energy_bank >= need else (self._energy_bank / need)
+        drawn = min(self._energy_bank, need)
+        self._energy_bank -= drawn
+        # don't hoard more than a couple of fusion units of buffered energy
+        self._energy_bank = min(self._energy_bank, balance.FUEL_POWER["fusion_fuel"] * 2)
+        self.power_factor = factor
+        self.power_supplied = self.power_demand * factor
+        self.fuel_rate = burnt_units / dt if dt > 0 else 0.0
+        return factor
+
+    def fuel_energy_stock(self) -> float:
+        """Total building-power energy currently stored across all fuel tiers."""
+        return sum(self.inv.get(f, 0) * balance.FUEL_POWER[f] * self.research_fuel_mult
+                   for f in balance.FUEL_TIERS)
+
+    def seconds_to_empty(self) -> float:
+        """How long the current power demand can run on the fuel in stock (no refills).
+        inf if nothing is drawing power."""
+        if self.power_demand <= 0:
+            return float("inf")
+        return self.fuel_energy_stock() / self.power_demand
+
     # ---- production -------------------------------------------------------
     def update(self, dt: float) -> None:
-        # smelting & crafting throughput scale with research; the bank cap scales
-        # too, else a tiny per-tick cap would throttle the tech multipliers away.
+        # buildings need POWER: fuel is burnt to meet demand and throughput scales with
+        # how much of it is met (0 = unpowered = idle). Refined fuel goes MUCH further.
+        power = self.power_status(dt)
+        # smelting & crafting throughput scale with research AND available power; the
+        # bank cap scales too, else a tiny per-tick cap would throttle the multipliers.
         fmult = self.research_furnace_mult
         self._smelt_bank = min(self._smelt_bank
                                + self.furnaces * balance.FURNACE_SPEED[self.furnace_tier]
-                               * fmult * dt,
+                               * fmult * power * dt,
                                _SMELT_BANK_CAP * max(1.0, fmult))
         self._smelt()
         cmult = self.research_craft_mult
-        self._craft_bank = min(self._craft_bank + self.assemblers * cmult * dt,
+        self._craft_bank = min(self._craft_bank + self.assemblers * cmult * power * dt,
                                _CRAFT_BANK_CAP * max(1.0, cmult))
         self._craft()
 
@@ -168,12 +226,14 @@ class Economy:
             guard += 1
             progress = False
             for item in _BUILD_ORDER:
-                # processed fuels: only convert SURPLUS coal (keep a reserve for
-                # direct burning), and only make rocket fuel once it's researched
-                if item == "rocket_fuel" and not self.rocket_fuel_unlocked:
+                # fuel refining: gate nuclear/fusion behind research, and only refine
+                # SURPLUS coal (keep a raw-coal reserve so power/trains always have a
+                # base fuel even when the refined stock runs dry)
+                if item == "nuclear_fuel" and not self.nuclear_fuel_unlocked:
                     continue
-                if item in ("solid_fuel", "rocket_fuel") \
-                        and self.inv.get("coal", 0) <= balance.FUEL_COAL_RESERVE:
+                if item == "fusion_fuel" and not self.fusion_fuel_unlocked:
+                    continue
+                if item in _FUEL_CHAIN and self.inv.get("coal", 0) <= balance.FUEL_COAL_RESERVE:
                     continue
                 cap = self.cap_of(item)
                 if item == "science_pack":

@@ -673,7 +673,8 @@ class Simulation:
         self.economy.research_craft_mult = self.research.craft_mult
         self.economy.research_storage_mult = self.research.storage_mult
         self.economy.research_fuel_mult = self.research.fuel_efficiency
-        self.economy.rocket_fuel_unlocked = self.research.rocket_fuel_unlocked
+        self.economy.nuclear_fuel_unlocked = self.research.nuclear_fuel_unlocked
+        self.economy.fusion_fuel_unlocked = self.research.fusion_fuel_unlocked
 
     def build_assembler(self, n: int = 1) -> tuple[bool, str]:
         if not self.economy.spend({"assembler": n}):
@@ -763,4 +764,10 @@ class Simulation:
             "damaged_trains": sum(1 for t in self.trains.values() if t.hp < t.max_hp - 0.5),
             "spaceflight": self.research.spaceflight,
             "ships_launched": self.ships_launched,
+            "power_demand": self.economy.power_demand,
+            "power_supplied": self.economy.power_supplied,
+            "power_factor": self.economy.power_factor,
+            "fuel_rate": self.economy.fuel_rate,
+            "burning": self.economy.burning,
+            "fuel_seconds_left": self.economy.seconds_to_empty(),
         }

@@ -66,8 +66,12 @@ class Research:
         return balance.fuel_efficiency(self.level)
 
     @property
-    def rocket_fuel_unlocked(self) -> bool:
-        return self.level >= balance.ROCKET_FUEL_TECH
+    def nuclear_fuel_unlocked(self) -> bool:
+        return self.level >= balance.NUCLEAR_FUEL_TECH
+
+    @property
+    def fusion_fuel_unlocked(self) -> bool:
+        return self.level >= balance.FUSION_FUEL_TECH
 
     @property
     def spaceflight(self) -> bool:
