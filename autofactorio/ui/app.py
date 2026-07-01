@@ -339,9 +339,16 @@ class App:
         if kind == "train":
             t = self.sim.trains.get(sid)
             if t:
+                from .. import balance
                 st = "following" if self.follow_selected else "selected"
-                text = (f"Train #{sid} [{st}]  cargo {t.cargo_total()}/{t.capacity}  "
-                        f"fuel {t.fuel_seconds:.0f}s  {t.state}"
+                # break the load down by resource (biggest first), not just the total
+                if t.cargo:
+                    parts = sorted(t.cargo.items(), key=lambda kv: (-kv[1], kv[0]))
+                    breakdown = ", ".join(f"{balance.DISPLAY_NAME.get(k, k)} {v}" for k, v in parts)
+                else:
+                    breakdown = "empty"
+                text = (f"Train #{sid} [{st}]  cargo {t.cargo_total()}/{t.capacity} "
+                        f"({breakdown})  fuel {t.fuel_seconds:.0f}s  {t.state}"
                         + ("  STALLED" if t.stalled else ""))
         elif kind == "field":
             f = self.sim.fields.get(sid)
