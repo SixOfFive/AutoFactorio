@@ -66,6 +66,10 @@ class Simulation:
         self.fields: dict[int, MiningField] = {}
         self.trains: dict[int, Train] = {}
         self.jobs: dict[int, ConstructionJob] = {}
+        # trunks whose field set changed (a milk-run field joined or depleted) and whose
+        # one train must adopt a fresh leg-loop; applied the next time that train is
+        # parked at its home unload stop (a safe point - see _service_station).
+        self._trunk_dirty: set[int] = set()
         self.ships: list[Ship] = []
         self._ship_timer = 0.0
         self._ship_id = 0
@@ -214,32 +218,12 @@ class Simulation:
                         self.log(f"Train #{t.id} crushed wildlife (-{int(balance.TRAIN_CRUSH_DAMAGE)} hp).")
                         break
 
-    def _bind_throat(self, train: Train, field) -> None:
+    def _bind_throat(self, train: Train, tk) -> None:
         """Tie a train to its trunk's home throat (the mutex'd turnaround)."""
-        tk = self.net.trunks.get(getattr(field, "trunk_id", -1))
         if tk is None:
             return
         center, radius = self.net.trunk_throat(tk)
         train.set_throat(center, radius, tk.id, self.net)
-
-    def _spawn_position(self, train: Train, field) -> None:
-        """Place a freshly dispatched train so it never spawns ON TOP of another (the
-        whole sector shares the home throat). The first train for a field parks at its
-        own load stop (each field is a distinct spot); additional trains are spaced out
-        along the return leg, so they enter the shared queue already separated."""
-        idx = sum(1 for t in self.trains.values()
-                  if t is not train and self._train_field(t) == field.id)
-        if idx <= 0:                                  # first train: park at the load stop
-            train.head_s = train.leg_len
-            train.state = "waiting"
-            train.wait_timer = 0.0
-            train.idle_timer = 0.0
-            return
-        # extra train: drop it onto the return leg, staggered back from the field
-        gap = balance.MAX_TRAIN_LEN + balance.COUPLING + 2
-        train.begin_leg(self.net, 1)
-        train.head_s = min(train.leg_len, idx * gap)
-        train.state = "moving"
 
     def _arbitrate_junction(self, dt: float) -> None:
         """Interlock each TRUNK's home throat (its balloon turnaround is too small for
@@ -399,6 +383,16 @@ class Simulation:
             if train.recall and st.is_home and (train.cargo_total() == 0
                                                 or train.idle_timer >= WAIT_IDLE):
                 self._store_train(train)
+            elif st.is_home and train.trunk_id in self._trunk_dirty:
+                # SAFE POINT: the corridor's field set changed (a milk-run field joined
+                # or depleted). Adopt a fresh leg-loop now - or store + tear down if the
+                # whole corridor is spent - rather than loop back out on the stale route.
+                self._trunk_dirty.discard(train.trunk_id)
+                tk = self.net.trunks.get(train.trunk_id)
+                if tk is not None:
+                    self._rebuild_trunk_train(tk, train)
+                else:
+                    train.depart(self.net)
             else:
                 train.depart(self.net)
 
@@ -507,7 +501,7 @@ class Simulation:
         self._new_job(fid, patch.cx, patch.cy, list(new_e), legs, activates_field=True)
         self.economy.spend(costs)
         self._deplete_nearer_fields(fid, math.dist(HOME, (patch.cx, patch.cy)))
-        shared = "" if created else " (shares an existing trunk)"
+        shared = "" if created else f" (joins milk-run corridor #{trunk.id})"
         self.log(f"Field #{fid} planned on {patch.ore.replace('_', ' ')} patch #{patch_id}{shared}; "
                  f"a robot will lay {rails_needed} rail and {field.drills} drills.")
         return True, f"field #{fid} planned on patch #{patch_id} ({patch.ore})"
@@ -521,23 +515,97 @@ class Simulation:
         return jid
 
     def complete_job(self, job) -> None:
-        """A robot reached the build site: solidify the track and dispatch the train."""
+        """A robot reached the build site: solidify the track and make sure the corridor's
+        ONE train is running - dispatching it for the corridor's first field, or (for a
+        milk-run field that just joined an existing corridor) scheduling the running train
+        to adopt a fresh leg-loop so it starts serving the new field too."""
         for eid in job.edge_ids:
             e = self.net.edges.get(eid)
             if e is not None:
                 e.built = True
-        tid = self._tid
-        self._tid += 1
-        train = Train(tid, job.legs, balance.DEFAULT_WAGONS, self.net, self.research)
-        self.trains[tid] = train
         field = self.fields.get(job.field_id)
-        if field is not None:
-            self._bind_throat(train, field)
-            self._spawn_position(train, field)
         if job.activates_field and field is not None:
             field.state = "active"
+        tk = self.net.trunks.get(field.trunk_id) if field is not None else None
+        if tk is not None:
+            self._ensure_trunk_train(tk)
         self.jobs.pop(job.id, None)
-        self.log(f"Robot laid the track for field #{job.field_id}; train #{tid} dispatched.")
+        self.log(f"Robot laid the track for field #{job.field_id}.")
+
+    # ---- one train per trunk (milk-run corridors) -------------------------
+    def _trunk_legs(self, fields) -> list:
+        """The trunk train's full route: each member field's out-and-back legs, chained
+        (inner field first). Every field's out-leg starts at the shared home unload stop
+        and its return-leg ends there, so the single train visits the fields one after
+        another - returning home between each - and is only ever on ONE leg at a time, so
+        it can never contend with itself (this is what keeps the corridor jam-free)."""
+        ordered = sorted(fields, key=lambda f: math.hypot(f.patch.cx, f.patch.cy))
+        legs = []
+        for f in ordered:
+            for (edges, sid, wait) in f.legs_template:
+                legs.append(Leg(list(edges), sid, tuple(wait)))
+        return legs
+
+    def _ensure_trunk_train(self, tk) -> None:
+        """Guarantee the corridor has exactly ONE train covering its active fields: if it
+        has none yet, dispatch one (parked at the first field's load stop); if it already
+        has one, flag it to adopt a fresh leg-loop at its next home stop so a just-joined
+        field gets served (never a second train - that is what used to gridlock)."""
+        active = [self.fields[fid] for fid in tk.field_ids
+                  if fid in self.fields and self.fields[fid].state == "active"]
+        if not active:
+            return
+        train = self.trains.get(tk.train_id) if tk.train_id >= 0 else None
+        if train is not None:
+            self._trunk_dirty.add(tk.id)
+            return
+        tid = self._tid
+        self._tid += 1
+        train = Train(tid, self._trunk_legs(active), balance.DEFAULT_WAGONS,
+                      self.net, self.research)
+        train.trunk_id = tk.id
+        tk.train_id = tid
+        self.trains[tid] = train
+        self._bind_throat(train, tk)
+        train.head_s = train.leg_len          # park at the first field's load stop
+        train.state = "waiting"
+        train.wait_timer = 0.0
+        train.idle_timer = 0.0
+        self.log(f"Train #{tid} dispatched on corridor #{tk.id} "
+                 f"(serving {len(active)} field(s)).")
+
+    def _rebuild_trunk_train(self, tk, train) -> None:
+        """Called at the train's home stop when its corridor's field set changed. Adopt a
+        fresh leg-loop over the currently-active fields and reclaim any depleted ones. If
+        nothing is active any more, store the train and tear the whole corridor down."""
+        active = [self.fields[fid] for fid in tk.field_ids
+                  if fid in self.fields and self.fields[fid].state == "active"]
+        removing = [fid for fid in list(tk.field_ids)
+                    if fid in self.fields and self.fields[fid].state == "recalling"]
+        if not active:
+            self._store_train(train)
+            tk.train_id = -1
+            for fid in list(tk.field_ids):
+                fld = self.fields.get(fid)
+                if fld is None:
+                    continue
+                for item, qty in self.teardown_field_track(fld).items():
+                    self._reclaim_stock(item, qty)
+            self.log(f"Corridor #{tk.id} fully depleted; train stored and materials "
+                     f"reclaimed to base.")
+            return
+        train.legs = self._trunk_legs(active)
+        train.recall = False
+        train.begin_leg(self.net, 0)          # restart cleanly, outbound to the first field
+        for fid in removing:
+            fld = self.fields.get(fid)
+            if fld is None:
+                continue
+            for item, qty in self.teardown_field_track(fld).items():
+                self._reclaim_stock(item, qty)
+        if removing:
+            self.log(f"Corridor #{tk.id}: dropped {len(removing)} depleted field(s); "
+                     f"train now serves {len(active)}; materials reclaimed to base.")
 
     def _deplete_nearer_fields(self, new_fid: int, new_dist: float) -> None:
         """Claiming a farther field accelerates depletion of the nearer ones in
@@ -562,9 +630,10 @@ class Simulation:
 
     def abandon_field(self, field_id: int) -> tuple[bool, str]:
         """Begin decommissioning a depleted field. This does NOT instantly remove
-        anything: the field's trains are recalled to finish their run, drive home,
-        and go into storage; only once they are all stored does a robot get sent
-        to tear up the track + drills and haul the materials back to base."""
+        anything: the field is flagged, and its corridor's train adopts a fresh leg-loop
+        at its next home stop that no longer visits it - at which point the field's siding
+        + drills are reclaimed. If it was the LAST field on the corridor, the train is
+        stored and the whole corridor torn down (all handled in _rebuild_trunk_train)."""
         field = self.fields.get(field_id)
         if field is None:
             return False, f"no field #{field_id}"
@@ -573,18 +642,20 @@ class Simulation:
         if not field.patch.depleted:
             return False, f"field #{field_id} still has ore; not abandoning"
         field.state = "recalling"
-        n = 0
-        for t in self.trains.values():
-            if self._train_field(t) == field_id:
-                t.recall = True
-                n += 1
-        self.log(f"Field #{field_id} depleted: recalling {n} train(s) to storage "
-                 f"before tearing up the track.")
+        tk = self.net.trunks.get(field.trunk_id)
+        if tk is None:                                   # no corridor (shouldn't happen)
+            return True, f"decommissioning field #{field_id}"
+        self._trunk_dirty.add(tk.id)
+        others = [fid for fid in tk.field_ids
+                  if fid != field_id and fid in self.fields
+                  and self.fields[fid].state == "active"]
+        if others:
+            self.log(f"Field #{field_id} depleted; the corridor #{tk.id} train will drop it "
+                     f"at its next home stop (still serving {len(others)} field(s)).")
+        else:
+            self.log(f"Field #{field_id} depleted (last on corridor #{tk.id}): the train "
+                     f"returns to storage, then the track is torn up.")
         return True, f"decommissioning field #{field_id}"
-
-    def _train_field(self, train: Train) -> int | None:
-        st = self.net.stations.get(train.legs[0].station_id)
-        return st.field_id if st is not None else None
 
     def _store_train(self, train: Train) -> None:
         for bid in list(train.locked):
@@ -606,21 +677,27 @@ class Simulation:
             self.economy.inv[item] += (qty - stored)
 
     def _update_decommission(self) -> None:
-        """Once a recalled field's train is home/stored, tear its loop down IMMEDIATELY:
-        remove the track and FREE ITS BEARING SLOT so a new field can be built in that
-        direction right away, and credit the reclaimed materials back to the base. (We
-        used to leave the dead loop standing until a robot slowly drove out to dismantle
-        it - but a private loop OWNS one of the base's limited radial slots, so lingering
-        dead loops choked off all the slots and the train fleet drained to zero. Prompt
-        recycling keeps the frontier - and the fleet - alive.)"""
-        for field in list(self.fields.values()):
-            if field.state == "recalling":
-                if not any(self._train_field(t) == field.id for t in self.trains.values()):
-                    mats = self.teardown_field_track(field)     # removes track + frees slot
-                    for item, qty in mats.items():
+        """Safety net for corridors that have NO train yet (their first field is still
+        being laid) but already hold a depleted field: reclaim it and, if nothing is left
+        active, tear the corridor down. The common case - a corridor WITH a train - is
+        handled at the train's home stop by _rebuild_trunk_train (immediate recycling so a
+        dead field never hogs one of the base's limited radial slots)."""
+        for tk in list(self.net.trunks.values()):
+            if tk.train_id >= 0 and tk.train_id in self.trains:
+                continue                                    # has a train: handled at home stop
+            recalling = [fid for fid in tk.field_ids
+                         if fid in self.fields and self.fields[fid].state == "recalling"]
+            active = [fid for fid in tk.field_ids
+                      if fid in self.fields and self.fields[fid].state == "active"]
+            if recalling and not active:
+                for fid in list(tk.field_ids):
+                    fld = self.fields.get(fid)
+                    if fld is None:
+                        continue
+                    for item, qty in self.teardown_field_track(fld).items():
                         self._reclaim_stock(item, qty)
-                    self.log(f"Field #{field.id} dismantled; loop cleared and "
-                             f"materials reclaimed to base.")
+                self.log(f"Corridor #{tk.id} dismantled; loop cleared and "
+                         f"materials reclaimed to base.")
 
     def teardown_field_track(self, field) -> dict:
         """Called by a robot that has reached a decommissioned field: remove its

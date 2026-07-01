@@ -842,31 +842,146 @@ def test_separated_fields_get_disjoint_loops_and_dont_jam():
     assert sim.stats()["stalled_trains"] == 0
 
 
-def test_same_direction_second_field_is_refused():
-    """A field whose bearing is within the merge angle of an existing loop is REFUSED
-    (its loop would overlap), so same-direction fields never pile up and gridlock -
-    the caller must expand in a different direction."""
+def _inject_collinear_patches(sim, bearing, radii, ore="iron_ore", spread_deg=2.5):
+    """Drop synthetic ore patches strung out along one bearing (a small angular spread
+    per patch) so they must share a single milk-run corridor. Returns the new patches."""
+    import math
+    from autofactorio.engine.world import OrePatch
+    nid = max(p.id for p in sim.world.patches) + 1
+    made = []
+    for i, r in enumerate(radii):
+        a = bearing + (i - (len(radii) - 1) / 2) * math.radians(spread_deg)
+        p = OrePatch(nid, ore, int(round(math.cos(a) * r)), int(round(math.sin(a) * r)),
+                     3, 25000, 25000, discovered=True)
+        sim.world.patches.append(p)
+        made.append(p)
+        nid += 1
+    return made
+
+
+def _stock_everything(sim):
+    for k in ("rail", "rail_signal", "chain_signal", "train_stop", "locomotive",
+              "cargo_wagon", "electric_drill", "iron_plate", "steel_plate", "stone", "coal"):
+        sim.economy.inv[k] = 10_000_000
+    for item in sim.economy.caps:
+        sim.economy.caps[item] = 10_000_000
+
+
+def test_milkrun_corridor_chains_fields_with_one_train():
+    """Several patches close in bearing JOIN one corridor (a milk-run) served by exactly
+    ONE train that visits them in turn. One train per corridor => it is only ever on one
+    leg at a time, so the corridor stays jam-free no matter how many fields it chains."""
     import math
     sim = Simulation(Config())
     sim.world.explored[:] = 1
-    for p in sim.world.patches:
-        p.discovered = True
-    for k in ("rail", "rail_signal", "chain_signal", "train_stop", "locomotive",
-              "cargo_wagon", "electric_drill", "iron_plate", "steel_plate"):
-        sim.economy.inv[k] = 1_000_000
-    patches = sorted(sim.world.claimable_patches(), key=lambda q: math.hypot(q.cx, q.cy))
-    first = patches[0]
-    ok, _ = sim.build_field(first.id)
-    assert ok
-    b0 = math.atan2(first.cy, first.cx)
-    # find another discovered patch within the merge angle of the first - it must be refused
-    near = next((p for p in patches if p is not first
-                 and abs((math.atan2(p.cy, p.cx) - b0 + math.pi) % (2 * math.pi) - math.pi)
-                 < math.radians(balance.TRUNK_MERGE_DEG - 2)), None)
-    if near is not None:
-        assert not sim.can_build_field(near)
-        ok2, msg = sim.build_field(near.id)
-        assert not ok2 and "corridor" in msg
+    _stock_everything(sim)
+    patches = _inject_collinear_patches(sim, bearing=0.7, radii=(60, 85, 110))
+    for p in patches:
+        ok, msg = sim.build_field(p.id)
+        assert ok, msg
+    _settle(sim, max_s=180)
+    # all three fields landed on ONE corridor, served by ONE train
+    assert len(sim.net.trunks) == 1
+    tk = next(iter(sim.net.trunks.values()))
+    assert len(tk.field_ids) == 3, tk.field_ids
+    assert len(sim.trains) == 1
+    train = next(iter(sim.trains.values()))
+    assert train.trunk_id == tk.id
+    # the train adopts joined fields lazily at its next home stop; within a round trip its
+    # route grows to cover all three fields (2 legs per field)
+    for f in sim.fields.values():
+        f.patch.reserve = f.patch.max_reserve = 10_000_000
+    for _ in range(int(120 / (1 / 60))):
+        sim.tick(1 / 60)
+        if len(train.legs) == 6:
+            break
+    assert len(train.legs) == 6, f"train never picked up all fields ({len(train.legs)} legs)"
+    # run: one train per corridor => no stalls, deliveries flow, no jam
+    d0 = sim.delivered_total
+    maxblock = 0.0
+    for _ in range(int(300 / (1 / 60))):
+        sim.tick(1 / 60)
+        maxblock = max(maxblock, train.blocked_time)
+    assert sim.delivered_total > d0, "milk-run corridor stopped delivering"
+    assert maxblock < 5.0, f"milk-run train jammed (blocked {maxblock:.1f}s)"
+    assert sim.stats()["stalled_trains"] == 0
+
+
+def test_milkrun_corridor_survives_save_load(tmp_path):
+    """A multi-field milk-run corridor (one train, several fields, >2 legs) must round-trip
+    through save/load intact and keep delivering."""
+    sim = Simulation(Config())
+    sim.world.explored[:] = 1
+    _stock_everything(sim)
+    for p in _inject_collinear_patches(sim, bearing=-1.2, radii=(60, 88, 116)):
+        assert sim.build_field(p.id)[0]
+    _settle(sim, max_s=180)
+    tk = next(iter(sim.net.trunks.values()))
+    assert len(tk.field_ids) == 3 and len(sim.trains) == 1
+    # let the train actually adopt all three fields (lazy pickup at its home stop) so we
+    # save a genuine multi-field route
+    train = next(iter(sim.trains.values()))
+    for f in sim.fields.values():
+        f.patch.reserve = f.patch.max_reserve = 10_000_000
+    for _ in range(int(120 / (1 / 60))):
+        sim.tick(1 / 60)
+        if len(train.legs) == 6:
+            break
+    assert len(train.legs) == 6
+    path = str(tmp_path / "milkrun.json")
+    assert sim.save(path)[0]
+
+    sim2 = Simulation(Config(seed=sim.world.seed))
+    # the world regenerates from the seed, so re-inject the SAME synthetic patches (same
+    # ids/positions) the save refers to before loading (real seed-born patches regen on
+    # their own; this only matters for the test's injected ones)
+    _inject_collinear_patches(sim2, bearing=-1.2, radii=(60, 88, 116))
+    assert sim2.load(path)[0]
+    assert len(sim2.net.trunks) == 1
+    tk2 = next(iter(sim2.net.trunks.values()))
+    assert len(tk2.field_ids) == 3
+    assert len(sim2.trains) == 1
+    t2 = next(iter(sim2.trains.values()))
+    assert t2.trunk_id == tk2.id and len(t2.legs) == 6
+    for f in sim2.fields.values():
+        f.patch.reserve = f.patch.max_reserve = 10_000_000
+    d0 = sim2.delivered_total
+    for _ in range(int(120 / (1 / 60))):
+        sim2.tick(1 / 60)
+    assert sim2.delivered_total > d0, "reloaded milk-run corridor stopped delivering"
+
+
+def test_near_field_joins_far_field_opens_and_between_is_refused():
+    """The corridor placement policy: a patch within TRUNK_JOIN_DEG of a corridor JOINS it
+    (shares its one train); a patch >= TRUNK_MERGE_DEG from every corridor opens a new one;
+    a patch stuck BETWEEN those angles is refused (expand elsewhere)."""
+    import math
+    sim = Simulation(Config())
+    sim.world.explored[:] = 1
+    _stock_everything(sim)
+    b = 0.4
+    # 1) seed a corridor
+    first = _inject_collinear_patches(sim, bearing=b, radii=(70,))[0]
+    assert sim.build_field(first.id)[0]
+    tk = next(iter(sim.net.trunks.values()))
+    # 2) a patch a hair inside the join angle JOINS the same corridor (one train)
+    near = _inject_collinear_patches(sim, bearing=b + math.radians(balance.TRUNK_JOIN_DEG - 2),
+                                     radii=(100,))[0]
+    assert sim.can_build_field(near)
+    assert sim.build_field(near.id)[0]
+    assert len(sim.net.trunks) == 1 and len(tk.field_ids) == 2
+    # 3) a patch between the join and merge angles cannot be served -> refused
+    mid = _inject_collinear_patches(sim, bearing=b + math.radians(
+        (balance.TRUNK_JOIN_DEG + balance.TRUNK_MERGE_DEG) / 2), radii=(130,))[0]
+    assert not sim.can_build_field(mid)
+    ok, msg = sim.build_field(mid.id)
+    assert not ok and "corridor" in msg
+    # 4) a patch well clear of the corridor (>= merge angle) opens its OWN corridor
+    far = _inject_collinear_patches(sim, bearing=b + math.radians(balance.TRUNK_MERGE_DEG + 6),
+                                    radii=(80,))[0]
+    assert sim.can_build_field(far)
+    assert sim.build_field(far.id)[0]
+    assert len(sim.net.trunks) == 2
 
 
 def test_add_train_is_refused_one_train_per_loop():

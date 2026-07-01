@@ -73,32 +73,42 @@ and releases them behind it. Head-on collisions are structurally impossible
 (directed edges) and same-lane rear-end collisions are prevented by the block
 mutex (blocks are sized >= a train length).
 
-**Every field gets its OWN private loop, run by exactly ONE train** (`engine/rail.py`
-`Trunk`, one field per trunk): a home balloon-loop + unload depot out on a big **home
-ring**, a straight radial spine out to the patch, and a field turnaround. This is the
-only arrangement that is *provably* deadlock-free, and it was reached the hard way -
-every design that let loops converge near the origin, or put 2+ trains through a
-single home balloon, gridlocked (trains from different loops, or two trains on one
-balloon, hard-stop nose-to-tail in a cycle no interlock can unwind).
+**Every corridor is run by exactly ONE train** (`engine/rail.py` `Trunk`): a home
+balloon-loop + unload depot out on a big **home ring**, a straight radial spine, and a
+short **siding** (out-lane → patch U-turn → in-lane) for each field it serves. The
+deadlock-free invariant, reached the hard way, is simply **one train per corridor** - a
+lone train can never contend with itself no matter how many fields, sidings or U-turns
+its loop has (every design that let *different* loops converge near the origin, or put
+2+ trains through a single balloon, gridlocked: trains hard-stop nose-to-tail in a cycle
+no interlock can unwind).
+
+A corridor is a **milk-run**: its one train's route is the concatenation of each member
+field's out-and-back legs (`Simulation._trunk_legs`), so it visits the fields one after
+another - out to a field, load, U-turn, home to unload, out to the next - and is only
+ever on ONE leg at a time. This lifts the old one-field-per-slot cap: as the frontier
+extends, a new patch close in bearing to an existing corridor **joins** it (another
+siding on the shared spine, same train) instead of consuming a fresh angular slot, so
+the map fills densely with corridors chaining several fields outward.
 
 Two guarantees keep it jam-free:
-1. **One train per loop** (`TRUNK_MAX_FIELDS = 1`, `add_train` disabled) - a lone train
-   can never contend with itself.
-2. **Loops never converge.** A new field's loop is *radial* (the trunk points straight
-   at its patch) and is only placed if its bearing is `>= TRUNK_MERGE_DEG` from every
-   existing loop (`RailNetwork._bearing_clear` / `can_place_trunk`). Radial corridors
-   that far apart in bearing stay separated at *every* radius, so no two trains ever
-   come within a car's width of each other. A patch whose direction is already taken is
-   simply refused (`build_field` returns "no free rail corridor") - the director expands
-   in a different direction, and the frontier keeps moving as near patches deplete.
+1. **One train per corridor** (`add_train` disabled; a corridor's single train is
+   dispatched/rebuilt by `_ensure_trunk_train` / `_rebuild_trunk_train`).
+2. **Corridors never converge.** A new corridor is *radial* and is only opened if its
+   bearing is `>= TRUNK_MERGE_DEG` from every existing corridor (`_bearing_clear`); a
+   field only *joins* an existing corridor if within `TRUNK_JOIN_DEG` (kept well under
+   `TRUNK_MERGE_DEG/2` so a joined field's siding stays inside the corridor's angular
+   band and can never reach a neighbour). Patches stuck between those angles are refused
+   (`build_field` returns "no free rail corridor").
 
-Because two trains never share a block or a crossing, the block mutex + home-throat
-interlock (`Simulation._arbitrate_junction`) have nothing to resolve and the base can't
-jam. When a field depletes, its loop is torn down and its bearing slot freed the instant
-its train is stored (`_update_decommission`) so replacements can be built at once. Fields
-lie beyond the home ring (`PATCH_MIN_RING > TRUNK_HOME_RING`), so every loop runs cleanly
-outward. `MERGE_CLEAR` reserve-ahead block locking keeps a train that must wait for a
-block stopping with real clearance rather than nosing up to it.
+Because two *different* corridors never share a block or a crossing - and a corridor's
+lone train never contends with itself - the block mutex + home-throat interlock
+(`Simulation._arbitrate_junction`) have nothing to resolve and the base can't jam. When a
+field depletes it is dropped from its corridor's route the next time the train is home,
+and its siding + drills reclaimed (`_rebuild_trunk_train`); when the *last* field on a
+corridor depletes the train is stored and the whole corridor torn down, freeing the
+angular slot at once. Fields lie beyond the home ring (`PATCH_MIN_RING > TRUNK_HOME_RING`),
+so every loop runs cleanly outward. `MERGE_CLEAR` reserve-ahead block locking keeps a
+train that must wait for a block stopping with real clearance rather than nosing up to it.
 
 ## Testing
 Headless smoke tests (no window, run with the venv python):

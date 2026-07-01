@@ -45,6 +45,7 @@ class Train:
         self.stalled = False             # out of fuel mid-track
         self.waiting_for_train = False   # yielding to another train ahead
         self.recall = False              # field decommissioned: return home and store
+        self.trunk_id = -1               # the corridor this train serves (its milk-run of fields)
         self.locked: set[int] = set()
         self.holds_junction = False      # currently granted this train's home-throat mutex
         self.blocked_time = 0.0          # seconds held still by traffic (anti-deadlock)

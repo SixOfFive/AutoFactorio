@@ -85,9 +85,9 @@ def decide(sim, report) -> dict:
             return
         if not (p.discovered and not p.claimed and not p.depleted):
             return
-        # only claim patches whose radial corridor is clear of every existing loop -
-        # otherwise the build is refused (base ring is angularly full in that
-        # direction) and we'd just waste the turn. Spread out instead.
+        # only claim patches that can actually be served: either close enough to JOIN an
+        # existing corridor's milk-run, or far enough to open a fresh one. A patch stuck
+        # between those angles is refused, so skip it and spend the turn elsewhere.
         if not sim.net.can_place_trunk(math.atan2(p.cy, p.cx)):
             return
         cost = sim.field_cost(p, tier)

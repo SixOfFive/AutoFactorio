@@ -197,30 +197,42 @@ HOME_RING_BAY = 7                  # (legacy) extra ring per duplicate loop
 # converge near the origin deadlocks, because trains from different loops physically
 # pile into the cramped centre and hard-stop each other in a cycle no interlock can
 # unwind - and a single shared home balloon can only flow 1-2 trains before its
-# turnaround knots up. So the network is now the simplest thing that CANNOT deadlock:
-#   * exactly ONE field, ONE train per trunk (TRUNK_MAX_FIELDS=1) - a lone train on
-#     its own loop can never contend with itself; and
-#   * every trunk's home balloon sits out on a big HOME RING and the trunks are held
-#     far enough apart in bearing that no two loops ever come within a train's width
-#     of each other - so trains on different loops never interact either.
-# Two trains never share a block or a crossing, so the block/throat interlock has
-# nothing to resolve and the base simply never jams. Fields all lie BEYOND the home
-# ring (PATCH_MIN_RING > TRUNK_HOME_RING), so every loop runs cleanly outward. The
-# frontier keeps moving as near patches deplete, so expansion still feels unbounded
-# even though ~9-12 loops are live at once.
-TRUNK_MERGE_DEG = 22               # MINIMUM bearing separation between trunks. A new field
-                                   # gets its own trunk placed at its own bearing only if that
-                                   # is >= this angle from EVERY existing trunk (see
-                                   # RailNetwork._bearing_clear); once the circle's exclusion
-                                   # bands fill (~9-12 loops, depending on where the patches lie)
-                                   # no more can be placed and the field is refused until one
-                                   # frees up. At the home ring 22deg still keeps adjacent
-                                   # balloons a safe margin apart so loops are
-                                   # fully disjoint.
-TRUNK_MAX_FIELDS = 1               # ONE field (=> one train) per trunk. See above: a lone
-                                   # train on a private loop is the only arrangement that is
-                                   # provably deadlock-free. Do NOT raise this - 2+ trains on a
-                                   # single home balloon gridlock in some geometries.
+# turnaround knots up. So the deadlock-free invariant is: EXACTLY ONE TRAIN per trunk.
+# A lone train on its own loop can never contend with itself - no matter how many
+# fields, sidings, crossings or U-turns that loop has. That single rule is what makes
+# the base un-jammable, and everything below just preserves it:
+#   * ONE train per trunk, always (the train's route is the concatenation of each
+#     member field's out-and-back legs - it visits the fields one after another,
+#     returning home between each, so it is only ever on ONE leg at a time); and
+#   * every trunk's home balloon sits out on a big HOME RING, and trunks are held far
+#     enough apart in bearing (>= TRUNK_MERGE_DEG) that no two DIFFERENT trunks' track
+#     ever comes within a train's width of each other - so trains on different trunks
+#     never interact either.
+# A trunk can now carry SEVERAL fields ("milk-run" corridors): as the frontier extends
+# outward, a new patch close in bearing to an existing corridor JOINS it (a new siding
+# on the shared spine, same one train) instead of consuming a fresh angular slot. This
+# is what un-caps the map - the ~16 angular slots no longer bound the field count, each
+# slot chains a line of fields running outward - while the one-train rule keeps every
+# corridor provably jam-free. (One over-powered train easily out-hauls several slow
+# fields, so chaining is also an efficient match of haul capacity to mining rate.)
+TRUNK_MERGE_DEG = 22               # MINIMUM bearing separation to PLACE a NEW trunk: a fresh
+                                   # corridor is opened at a patch's bearing only if that is
+                                   # >= this angle from EVERY existing trunk (see
+                                   # RailNetwork._bearing_clear). Keeps distinct corridors far
+                                   # enough apart that their sidings never touch.
+TRUNK_JOIN_DEG = 8                 # a patch within THIS angle of an existing (non-full) trunk
+                                   # JOINS it as another milk-run field instead of opening a new
+                                   # corridor. Kept well under TRUNK_MERGE_DEG/2 so a joined
+                                   # field's siding (which reaches sideways toward its patch)
+                                   # stays inside the corridor's angular band and can never
+                                   # overlap a neighbouring trunk's track. Patches between
+                                   # TRUNK_JOIN_DEG and TRUNK_MERGE_DEG of every trunk are simply
+                                   # refused (expand elsewhere) - the frontier soon offers others.
+TRUNK_MAX_FIELDS = 5               # up to this many fields chained on ONE trunk, served by the
+                                   # SAME one train. A ceiling (not a target) so a corridor's
+                                   # super-cycle stays short enough that each field is revisited
+                                   # before its buffer overflows. Raising it is safe for
+                                   # deadlock (still one train) but slows per-field service.
 TRUNK_HOME_RING = 45               # radius of a trunk's home balloon-loop (the unload depot).
                                    # BIG on purpose: out here the balloons sit spread around a
                                    # wide ring and their inward bulge still stops well short of

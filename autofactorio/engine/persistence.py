@@ -21,12 +21,12 @@ from .rail import RailEdge, Block, Signal, Station, Trunk
 from .mining import MiningField
 from .trains import Train, Leg
 
-# v3: private disjoint-loop network - one field/one train per trunk, trunks held far
-# enough apart in bearing (on a big home ring) that no two loops ever converge, so the
-# base can't gridlock. v1/v2 saves used converge-at-home geometry that jams under this
-# traffic model, so they are NOT loadable - startup cleanly falls back to a fresh game
-# (which is exactly what we want: resuming an old save would bring the jam back).
-SAVE_VERSION = 3
+# v4: milk-run corridors - ONE train per trunk serving several chained fields (trunks
+# still held far enough apart that no two corridors' track ever converges, so the base
+# can't gridlock). Adds trunk.train_id and train.trunk_id. Older saves used a different
+# train<->field mapping (one train per field) that this loader can't reconstruct, so
+# they are NOT loadable - startup cleanly falls back to a fresh game.
+SAVE_VERSION = 4
 
 
 # ---- fog grid (de)compression --------------------------------------------
@@ -94,7 +94,7 @@ def save_game(sim, path: str) -> None:
                                     "out_nodes": tk.out_nodes, "out_seq": tk.out_seq,
                                     "in_nodes": tk.in_nodes, "in_seq": tk.in_seq,
                                     "unload_id": tk.unload_id, "max_r": tk.max_r,
-                                    "field_ids": list(tk.field_ids)}
+                                    "field_ids": list(tk.field_ids), "train_id": tk.train_id}
                        for tk in net.trunks.values()},
             "nodes": {str(k): list(v) for k, v in net.nodes.items()},
             "edges": {str(e.id): {"a": e.a, "b": e.b, "points": [list(p) for p in e.points],
@@ -124,7 +124,7 @@ def save_game(sim, path: str) -> None:
              "fuel_seconds": t.fuel_seconds, "speed": t.speed, "state": t.state,
              "cur_leg": t.cur_leg, "head_s": t.head_s, "wait_timer": t.wait_timer,
              "idle_timer": t.idle_timer, "stalled": t.stalled, "hp": t.hp,
-             "recall": t.recall,
+             "recall": t.recall, "trunk_id": t.trunk_id,
              "legs": [{"edges": l.edges, "station_id": l.station_id, "wait": list(l.wait)}
                       for l in t.legs]}
             for t in sim.trains.values()
@@ -271,7 +271,7 @@ def load_into(sim, path: str) -> None:
                                    list(t["out_nodes"]), list(t["out_seq"]),
                                    list(t["in_nodes"]), list(t["in_seq"]),
                                    t["unload_id"], t.get("max_r", 0.0),
-                                   list(t.get("field_ids", [])))
+                                   list(t.get("field_ids", [])), t.get("train_id", -1))
     net.junction_occupant = None         # interlock is transient; re-granted on tick
     net.throat_occupant = {}             # per-trunk throat mutex; re-granted on tick
 
@@ -307,13 +307,13 @@ def load_into(sim, path: str) -> None:
         t.stalled = st["stalled"]
         t.hp = st.get("hp", t.max_hp)
         t.recall = st.get("recall", False)
+        t.trunk_id = st.get("trunk_id", -1)
         sim.trains[st["id"]] = t
     # re-bind each train to its trunk's home throat (after fields + net are restored)
     for t in sim.trains.values():
-        fid = sim._train_field(t)
-        fld = sim.fields.get(fid) if fid is not None else None
-        if fld is not None:
-            sim._bind_throat(t, fld)
+        tk = sim.net.trunks.get(t.trunk_id) if t.trunk_id >= 0 else None
+        if tk is not None:
+            sim._bind_throat(t, tk)
 
     # construction jobs (robots still building these)
     from .simulation import ConstructionJob

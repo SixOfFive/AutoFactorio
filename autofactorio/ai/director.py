@@ -35,12 +35,16 @@ You receive a JSON game-state report. Reply with ONLY a JSON object:
 {"reasoning": "<one short sentence>", "actions": [ <action>, ... ]}
 
 Valid actions (use the exact "action" names and integer ids from the report):
-- {"action":"build_field","patch_id":N}      claim a discovered patch: builds its OWN
-                                              private rail loop + one train. Only patches
-                                              with "affordable":true succeed; a patch too
-                                              close in DIRECTION to an existing loop is not
-                                              affordable (its loop would overlap) - expand
-                                              in a spread of directions.
+- {"action":"build_field","patch_id":N}      claim a discovered patch. A patch close in
+                                              DIRECTION to an existing corridor JOINS it as
+                                              another stop on that corridor's milk-run (its
+                                              one train serves it too - no new train); a patch
+                                              in a fresh direction opens a new corridor + train.
+                                              Only patches with "affordable":true succeed (a
+                                              patch that is neither close enough to join nor far
+                                              enough to open a new corridor reads as not
+                                              affordable) - so expand in a SPREAD of directions
+                                              AND keep extending existing ones outward.
 - {"action":"abandon_field","field_id":N}      retire a field whose patch is depleted
                                               (report shows "depleted":true); salvages its train.
 - {"action":"build_furnace","count":N}        deploy furnaces from stock to smelt faster.
@@ -79,10 +83,10 @@ Each turn, in priority order:
    build_storage for EACH item in "storage_full". Build a robot on WILDLIFE_PRESSURE/
    DAMAGED_TRAINS when robots.can_build.
 2. EXPAND HARD: claim EVERY patch with "affordable":true this turn (multiple
-   build_field actions), favoring ore types you have fewest of AND spreading across
-   DIRECTIONS (each field needs its own clear direction; same-direction patches read
-   as not affordable). Add drills (expand_drills) to your productive fields to mine a
-   field out faster.
+   build_field actions), favoring ore types you have fewest of. Patches near an existing
+   corridor JOIN it (denser network, no extra train); patches in fresh directions open new
+   corridors - both are good, so grab them all. Add drills (expand_drills) to your
+   productive fields to mine a field out faster.
 3. SCALE PRODUCTION to match intake: if ORE_BACKING_UP, smelting is the bottleneck -
    build_furnace (a handful, count ~4-6). If PLATES_BACKING_UP, crafting is -
    build_assembler (count ~3-4). Keep adding as long as those flags persist so

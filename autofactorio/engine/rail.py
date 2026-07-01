@@ -64,14 +64,15 @@ class Station:
 
 @dataclass
 class Trunk:
-    """A shared double-track MAIN LINE serving one angular sector. Its home end is a
-    balloon-loop (with the one shared unload station) at TRUNK_HOME_RING; from there
-    a straight radial spine runs outward (out_seq) and back (in_seq). Each member
-    field attaches a short SIDING at its own radius (nearest spine node), so trains
-    share the long spine (one-train-per-block => they follow each other and travel to
-    different fields along the same track) while only the short sidings are private.
-    The spine is straight, so it can be APPENDED to (extended outward) for a farther
-    field without disturbing existing edge ids / legs."""
+    """A shared MAIN LINE serving one angular sector, run by exactly ONE train. Its home
+    end is a balloon-loop (with the one shared unload station) at TRUNK_HOME_RING; from
+    there a straight radial spine runs outward (out_seq) and back (in_seq). Each member
+    field attaches a short SIDING (out-lane -> patch U-turn -> in-lane) at its own radius
+    on the shared spine. The trunk's single train visits its fields one after another -
+    out to a field, load, U-turn, back home to unload, out to the next field - so it is
+    only ever on ONE leg at a time and can never contend with itself. The spine is
+    straight, so it can be APPENDED to (extended outward) for a farther field without
+    disturbing existing edge ids / legs."""
     id: int
     bearing: float
     home_edges: list[int]                    # balloon loop: unload(A_in) -> A_out
@@ -82,6 +83,7 @@ class Trunk:
     unload_id: int                           # the one shared home unload station
     max_r: float = 0.0                       # current outer radius the spine reaches
     field_ids: list[int] = field(default_factory=list)
+    train_id: int = -1                       # the ONE train serving this corridor (-1 = none yet)
 
 
 class RailNetwork:
@@ -216,19 +218,20 @@ class RailNetwork:
 
     # ---- shared-track trunk network ---------------------------------------
     def find_or_make_trunk(self, bearing: float, reach: float) -> tuple[Trunk, bool]:
-        """Return the trunk serving this bearing's sector (building a new one, reaching
-        out to `reach` tiles, if none is within TRUNK_MERGE_DEG). 2nd value: created?
+        """Return the trunk serving this bearing (2nd value: was it newly created?).
 
-        A field ALWAYS joins the nearest trunk within the merge angle - there is NO
-        per-trunk field cap. That cap used to force a brand-new trunk in nearly the
-        SAME bearing once a sector filled up, and those parallel trunks' home balloons
-        physically overlapped near the origin (their throat interlocks are independent),
-        which gridlocked every train in that direction. By only ever creating a new
-        trunk when NO existing one is within TRUNK_MERGE_DEG, every pair of trunks stays
-        at least that angle apart, so their home throats never overlap - clustered
-        same-direction fields share ONE trunk's spine (queueing single-file) instead."""
+        A patch within TRUNK_JOIN_DEG of an existing, non-full trunk JOINS it as another
+        milk-run field on the shared spine (same one train). Otherwise, if the bearing is
+        >= TRUNK_MERGE_DEG from EVERY existing trunk, a fresh corridor is opened reaching
+        out to `reach` tiles. A patch that is neither close enough to join nor far enough
+        to open its own corridor is refused (None) - the caller expands elsewhere.
+
+        TRUNK_JOIN_DEG is kept well under TRUNK_MERGE_DEG/2 so a joined field's siding
+        stays inside its corridor's angular band and can never reach a neighbouring trunk;
+        and building a new trunk only when nothing is within TRUNK_MERGE_DEG keeps every
+        pair of corridors far enough apart that their track never overlaps."""
         best = None
-        best_d = math.radians(balance.TRUNK_MERGE_DEG)
+        best_d = math.radians(balance.TRUNK_JOIN_DEG)
         for tk in self.trunks.values():
             if len(tk.field_ids) >= balance.TRUNK_MAX_FIELDS:
                 continue
@@ -239,7 +242,7 @@ class RailNetwork:
         if best is not None:
             return best, False
         if not self._bearing_clear(bearing):
-            return None, False                       # too close to another loop - refuse
+            return None, False                       # too close to another corridor - refuse
         return self.build_trunk(bearing, reach), True
 
     def _bearing_clear(self, bearing: float) -> bool:
@@ -257,14 +260,14 @@ class RailNetwork:
         return True
 
     def can_place_trunk(self, bearing: float) -> bool:
-        """True if a field on this bearing can be served: either an existing non-full
-        trunk is within the merge angle (would share it), or the bearing is clear for a
-        fresh radial loop. With TRUNK_MAX_FIELDS=1 this is just 'the bearing is clear'."""
-        sep = math.radians(balance.TRUNK_MERGE_DEG)
+        """True if a field on this bearing can be served: either it can JOIN an existing
+        non-full trunk (within TRUNK_JOIN_DEG), or the bearing is clear enough
+        (>= TRUNK_MERGE_DEG from all trunks) to open a fresh corridor."""
+        join = math.radians(balance.TRUNK_JOIN_DEG)
         for tk in self.trunks.values():
             if len(tk.field_ids) < balance.TRUNK_MAX_FIELDS:
                 d = abs((bearing - tk.bearing + math.pi) % (2 * math.pi) - math.pi)
-                if d <= sep:
+                if d <= join:
                     return True
         return self._bearing_clear(bearing)
 
