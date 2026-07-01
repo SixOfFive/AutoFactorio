@@ -349,12 +349,25 @@ STORAGE_MAX_MULT = 5.0
 # ---------------------------------------------------------------------------
 # World generation
 # ---------------------------------------------------------------------------
-MAP_RADIUS = 160                   # half-size of the square map in tiles
-SCOUT_REVEAL_RADIUS = 9            # tiles revealed around the explorer robot
+# The world is ENDLESS: it is not a fixed square. It starts as a MAP_RADIUS-sized grid
+# and GROWS outward (the fog canvas is re-centred + enlarged) whenever exploration nears
+# the current edge, and ore patches are generated procedurally per CELL on demand, so
+# there is always more frontier to explore and more ore to claim - the game never "ends".
+MAP_RADIUS = 160                   # INITIAL grid half-size (tiles); the world grows past this
+WORLD_GROW_STEP = 128              # grow the fog canvas by this many tiles at a time
+WORLD_GROW_MARGIN = 24             # grow once exploration comes within this of the edge
+SCOUT_REVEAL_RADIUS = 10           # tiles revealed around the explorer robot
 SCOUT_SPEED = 6.0                  # tiles/sec (explorer robot)
 TRAIN_REVEAL_RADIUS = 7            # tiles each moving train clears around its cars
                                    # (rails become sightlines: trains chart their route)
-PATCH_COUNT = 60                   # ore patches scattered across the map
+PATCH_CELL = 40                    # the plane is diced into CELL x CELL cells; each cell gets a
+                                   # patch (with PATCH_CELL_PROB) generated deterministically from
+                                   # (seed, cell) the first time the cell is materialised, so the
+                                   # ore field is endless yet reproducible + save-safe.
+PATCH_CELL_PROB = 0.70             # chance a cell contains an ore patch
+PATCH_RICH_SCALE = 600.0           # patches get richer with distance: reserve *= 1 + dist/this,
+                                   # so the ever-receding frontier is always worth expanding to.
+PATCH_COUNT = 60                   # (legacy; unused - patch count is now emergent from cells)
 PATCH_MIN_RING = 54                # barren ring around HQ; nearest patches start here. Must sit
                                    # OUTSIDE TRUNK_HOME_RING (the depot ring) so every field lies
                                    # beyond its trunk's home balloon and the loop runs outward.

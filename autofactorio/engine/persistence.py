@@ -21,12 +21,13 @@ from .rail import RailEdge, Block, Signal, Station, Trunk
 from .mining import MiningField
 from .trains import Train, Leg
 
-# v4: milk-run corridors - ONE train per trunk serving several chained fields (trunks
-# still held far enough apart that no two corridors' track ever converges, so the base
-# can't gridlock). Adds trunk.train_id and train.trunk_id. Older saves used a different
-# train<->field mapping (one train per field) that this loader can't reconstruct, so
-# they are NOT loadable - startup cleanly falls back to a fresh game.
-SAVE_VERSION = 4
+# v5: ENDLESS world - the map grows and ore patches are generated per-cell on demand, so
+# the full world state (growing fog canvas radius, materialised cells, all patches with
+# their positions, scenery) is now serialised in full and rebuilt verbatim on load (nothing
+# is regenerated). Also carries v4's milk-run corridors (trunk.train_id / train.trunk_id).
+# Older saves can't be reconstructed by this loader, so they are NOT loadable - startup
+# cleanly falls back to a fresh game.
+SAVE_VERSION = 5
 
 
 # ---- fog grid (de)compression --------------------------------------------
@@ -54,9 +55,18 @@ def save_game(sim, path: str) -> None:
             "list": [{"id": s.id, "reward": s.reward, "jitter": s.jitter,
                       "climb": s.climb, "delivered": s.delivered} for s in sim.ships],
         },
+        "world": {
+            "radius": sim.world.radius,
+            "pid": sim.world._pid,
+            "frontier_radius": sim.world.frontier_radius,
+            "cells_done": [[i, j] for (i, j) in sim.world._cells_done],
+            "decor": [[x, y, k] for (x, y, k) in sim.world.decor],
+        },
         "explored": _enc_grid(sim.world.explored),
         "patches": [
-            {"id": p.id, "reserve": p.reserve, "discovered": p.discovered, "claimed": p.claimed}
+            {"id": p.id, "ore": p.ore, "cx": p.cx, "cy": p.cy, "radius": p.radius,
+             "reserve": p.reserve, "max_reserve": p.max_reserve,
+             "discovered": p.discovered, "claimed": p.claimed}
             for p in sim.world.patches
         ],
         "kills": sim.kills,
@@ -160,18 +170,31 @@ def load_into(sim, path: str) -> None:
     sim._fid = data["counters"]["fid"]
     sim._tid = data["counters"]["tid"]
 
-    # world (rebuild from the saved seed if it differs, so patches line up)
+    # world: reconstruct the ENDLESS-world state fully from the save - the growing fog
+    # canvas, every materialised patch (with position/ore/reserves), which cells have been
+    # generated, and scenery. Nothing is regenerated, so it is exact regardless of seed.
+    from .world import World, OrePatch
     if data["seed"] != sim.world.seed:
-        from .world import World
         sim.world = World(data["seed"])
-    sim.world.explored = _dec_grid(data["explored"], sim.world.explored.shape)
-    pmap = {p.id: p for p in sim.world.patches}
+    w = sim.world
+    wd = data.get("world", {})
+    w.radius = int(wd.get("radius", balance.MAP_RADIUS))
+    w.size = w.radius * 2 + 1
+    w.explored = _dec_grid(data["explored"], (w.size, w.size))
+    w._pid = wd.get("pid", 0)
+    w.frontier_radius = float(wd.get("frontier_radius", w.radius))
+    w._cells_done = {tuple(c) for c in wd.get("cells_done", [])}
+    w.decor = [tuple(d) for d in wd.get("decor", [])]
+    w.patches = []
+    w._undiscovered = []
     for sp in data["patches"]:
-        p = pmap.get(sp["id"])
-        if p is not None:
-            p.reserve = sp["reserve"]
-            p.discovered = sp["discovered"]
-            p.claimed = sp["claimed"]
+        p = OrePatch(sp["id"], sp["ore"], sp["cx"], sp["cy"], sp["radius"],
+                     sp["reserve"], sp.get("max_reserve", sp["reserve"]),
+                     sp["discovered"], sp["claimed"])
+        w.patches.append(p)
+        if not p.discovered:
+            w._undiscovered.append(p)
+    pmap = {p.id: p for p in w.patches}
 
     sim.kills = data.get("kills", 0)
 

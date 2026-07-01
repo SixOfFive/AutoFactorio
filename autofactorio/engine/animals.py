@@ -38,10 +38,13 @@ class Animals:
 
     # ---- spawning ---------------------------------------------------------
     def _fog_spawn_point(self, world) -> tuple[int, int] | None:
-        R = world.radius
+        # spawn near the EXPLORED FRONTIER (not across the whole endless grid), so herds
+        # appear around the player's operations rather than thousands of tiles away
+        R = min(world.radius - 4, int(getattr(world, "frontier_radius", world.radius)) + 30)
+        R = max(R, 40)
         for _ in range(50):
-            tx = self.rng.randint(-R + 4, R - 4)
-            ty = self.rng.randint(-R + 4, R - 4)
+            tx = self.rng.randint(-R, R)
+            ty = self.rng.randint(-R, R)
             if tx * tx + ty * ty < 30 * 30:        # not on top of base
                 continue
             if not world.is_explored(tx, ty):       # spawn hidden in the fog

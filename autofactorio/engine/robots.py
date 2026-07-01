@@ -45,16 +45,13 @@ class Robot:
         return math.cos(self.angle) * self.radius, math.sin(self.angle) * self.radius
 
     def _advance_spiral(self) -> None:
-        max_r = balance.MAP_RADIUS - balance.SCOUT_REVEAL_RADIUS - 2
-        dtheta = max(0.25, balance.SCOUT_REVEAL_RADIUS / max(self.radius, 1.0))
+        # The world is endless, so the scout spirals OUTWARD forever - there is always more
+        # fog. Radial pitch is kept a little under the reveal diameter so consecutive arms
+        # overlap and the expanding disk fills in solid (no un-revealed gaps between arms).
+        dtheta = max(0.05, balance.SCOUT_REVEAL_RADIUS / max(self.radius, 1.0))
         self.angle += dtheta
-        if self.radius < max_r:
-            self.radius = min(max_r, self.radius + balance.SCOUT_REVEAL_RADIUS * dtheta / (2 * math.pi) * 6)
-        else:
-            # finished an outward spiral: head back near home and spiral out again
-            # on a rotated arm, so repeated passes fill in any remaining fog gaps.
-            self.radius = float(balance.SCOUT_REVEAL_RADIUS)
-            self.angle += 2.39996                      # golden-angle offset for fresh coverage
+        pitch = balance.SCOUT_REVEAL_RADIUS * 1.7      # tiles gained per full revolution
+        self.radius += pitch * dtheta / (2 * math.pi)
         self.tx, self.ty = self._spiral_target()
 
     def move_toward(self, tx: float, ty: float, speed: float, dt: float) -> float:

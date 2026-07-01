@@ -104,6 +104,56 @@ def test_starter_patches_discovered():
     assert "iron_ore" in ores and "coal" in ores
 
 
+def test_world_is_endless_grows_and_materializes_far_patches():
+    """The world is not a fixed square: exploring outward GROWS the fog canvas past the
+    initial radius and materialises brand-new ore patches out at the frontier."""
+    import math
+    sim = Simulation(Config())
+    w = sim.world
+    assert w.radius == balance.MAP_RADIUS
+    npatch0 = len(w.patches)
+    # sweep a corridor of reveals far past the initial edge
+    for d in range(150, 900, 12):
+        w.reveal(d, 0, 30)
+        w.reveal(0, d, 30)
+    assert w.radius > balance.MAP_RADIUS, "world did not grow when explored past its edge"
+    assert w.frontier_radius > 800
+    assert len(w.patches) > npatch0, "no new patches materialised at the frontier"
+    assert any(math.hypot(p.cx, p.cy) > balance.MAP_RADIUS + 40 for p in w.patches), \
+        "no ore generated beyond the initial region"
+
+
+def test_frontier_patches_are_richer():
+    """Patches get richer with distance (reserve *= 1 + dist/PATCH_RICH_SCALE), so the
+    receding frontier is always worth expanding to - the growth engine never runs dry."""
+    import math
+    w = Simulation(Config()).world
+    w._materialize_region(-1000, -1000, 1000, 1000)      # generate a big swath of cells
+    near = [p.max_reserve for p in w.patches if math.hypot(p.cx, p.cy) < 250]
+    far = [p.max_reserve for p in w.patches if math.hypot(p.cx, p.cy) > 650]
+    assert near and far
+    assert sum(far) / len(far) > sum(near) / len(near) * 1.3   # frontier is markedly richer
+
+
+def test_save_load_preserves_grown_world(tmp_path):
+    """A world that has grown past its initial size (with far-flung patches) round-trips
+    through save/load exactly - radius, materialised patches, and fog are all restored."""
+    sim = Simulation(Config())
+    for d in range(150, 700, 15):
+        sim.world.reveal(d, d // 3, 30)
+    grown_r = sim.world.radius
+    npatch = len(sim.world.patches)
+    explored = int(sim.world.explored.sum())
+    assert grown_r > balance.MAP_RADIUS
+    path = str(tmp_path / "grown.json")
+    assert sim.save(path)[0]
+    sim2 = Simulation(Config(seed=sim.world.seed))
+    assert sim2.load(path)[0]
+    assert sim2.world.radius == grown_r
+    assert len(sim2.world.patches) == npatch
+    assert int(sim2.world.explored.sum()) == explored
+
+
 def test_moving_train_reveals_fog():
     """A running train clears fog around each of its cars (rails are sightlines)."""
     import numpy as np
@@ -640,18 +690,18 @@ def test_farther_field_depletes_nearer_ones():
     assert near.reserve < before
 
 
-def test_explorer_spiral_restarts_from_home():
+def test_explorer_spiral_expands_outward_forever():
+    """The world is endless, so the scout spirals ever OUTWARD (monotonically increasing
+    radius) instead of resetting - there is always more frontier to reveal."""
     from autofactorio.engine.robots import Robot
     r = Robot(0, 0.0, 0.0, explorer=True)
+    start = r.radius
     prev = r.radius
-    restarted = False
-    for _ in range(3000):
+    for _ in range(4000):
         r._advance_spiral()
-        if r.radius < prev - 1.0:        # radius dropped sharply -> spiral reset
-            restarted = True
-            break
+        assert r.radius >= prev - 1e-6, "spiral radius went backwards (should never reset)"
         prev = r.radius
-    assert restarted
+    assert r.radius > start + 200, "scout did not push the frontier outward"
 
 
 # ---- block-mutex collision safety ----------------------------------------

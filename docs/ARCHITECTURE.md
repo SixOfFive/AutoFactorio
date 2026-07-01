@@ -19,10 +19,16 @@ run.py ──► ui/app.py ──► engine/simulation.py ──► engine/{worl
 ```
 
 ### engine/ — the authoritative simulation (no pygame, fully headless-testable)
-- **world.py** — tile map, `explored` fog grid (numpy), finite ore patches with
-  reserves. Guaranteed starter iron+coal patches near HQ so the loop bootstraps.
-- **scout.py** — drives an outward Archimedean spiral, revealing a radius of fog
-  each step and discovering patches.
+- **world.py** — an **endless** procedurally-generated world. The `explored` fog grid
+  (numpy) GROWS (re-centred on HQ + enlarged) whenever exploration nears the current
+  edge, and ore patches are generated **deterministically per CELL** the first time a
+  cell is materialised (from a `(seed, cell)` RNG), so the ore field is infinite yet
+  reproducible + save-safe. Patches get **richer with distance** (`PATCH_RICH_SCALE`), so
+  the receding frontier is always worth chasing — the game never runs out or "ends".
+  Guaranteed starter iron/copper/coal/stone patches near HQ bootstrap the loop.
+- **scout** (the explorer robot in **robots.py**) drives an outward Archimedean spiral
+  that expands FOREVER (the world is endless), overlapping arms to fill coverage; moving
+  trains also reveal fog along their corridors, so new patches keep surfacing outward.
 - **rail.py** — directed graph: nodes on the 2-tile lattice, one-way edges with
   polylines, **one block per edge with a mutex `occupant`**, signals at block
   boundaries, stations. `build_link()` lays **two parallel one-way lanes**
