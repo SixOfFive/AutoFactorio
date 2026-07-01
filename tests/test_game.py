@@ -705,6 +705,52 @@ def test_explorer_spiral_expands_outward_forever():
 
 
 # ---- block-mutex collision safety ----------------------------------------
+def test_build_station_geometry_is_chain_safe():
+    """The shared central terminal geometry (build_station): a closed one-way ring, a pool
+    of parallel platform berths long enough to hold a train, and - the key correctness
+    precondition - every CHAIN (junction) block reaches a plain rail safe-stop within
+    CHAIN_MAX_RUN hops, so a train never has to reserve an unbounded run to pass a junction."""
+    import collections
+    from autofactorio.engine.rail import RailNetwork
+
+    net = RailNetwork()
+    net.build_station()
+    N, P = balance.STATION_RING_ARCS, balance.STATION_PLATFORMS
+    assert len(net.ring_nodes) == N
+    for k in range(N):                                  # ring is a closed one-way cycle
+        e = net.edges[net.ring_arc[k]]
+        assert e.a == net.ring_nodes[k] and e.b == net.ring_nodes[(k + 1) % N]
+    assert len(net.platforms) == P
+    assert len(set(pf["ring_in"] for pf in net.platforms)) == P     # distinct ring nodes
+    assert min(net.edges[pf["plat_edge"]].length for pf in net.platforms) \
+        >= balance.MAX_TRAIN_LEN + balance.JUNCTION_CLEAR           # a train fits the berth
+
+    def out_neighbors(bid):
+        outs = set()
+        for e in net.edges.values():
+            if e.block_id == bid:
+                for e2 in net.out_edges.get(e.b, []):
+                    outs.add(net.edges[e2].block_id)
+        return outs
+
+    for cb in [b for b in net.blocks.values() if b.chain]:          # every chain run ends safely
+        seen, q, reached = {cb.id}, collections.deque([(cb.id, 0)]), None
+        while q:
+            bid, d = q.popleft()
+            blk = net.blocks.get(bid)
+            if blk is not None and not blk.chain:
+                reached = d
+                break
+            if d <= balance.CHAIN_MAX_RUN:
+                for nb in out_neighbors(bid):
+                    if nb not in seen:
+                        seen.add(nb)
+                        q.append((nb, d + 1))
+        assert reached is not None and reached <= balance.CHAIN_MAX_RUN, \
+            f"chain block {cb.id} does not reach a safe stop within {balance.CHAIN_MAX_RUN}"
+    assert net.pick_platform(0) is not None                         # a free berth is findable
+
+
 def test_chain_signals_make_a_shared_merge_deadlock_free_and_fair():
     """The chain-signal engine: THREE trains all funnel through ONE shared merge -> segment
     (marked CHAIN) -> diverge, from distinct approach bearings. A train may enter the shared

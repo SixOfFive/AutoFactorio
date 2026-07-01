@@ -240,6 +240,22 @@ TRUNK_HOME_RING = 45               # radius of a trunk's home balloon-loop (the 
                                    # r=20 ring bulged into the origin and gridlocked). Must stay
                                    # < PATCH_MIN_RING so every field is outside it (outward loop).
 TRUNK_STEM_LEN = 14                # spine segment step length
+
+# ---------------------------------------------------------------------------
+# Central STATION (one-way approach ring + shared parallel platform pool)
+# ---------------------------------------------------------------------------
+# A genuine shared terminal: every corridor merges onto ONE clockwise ring at its own
+# bearing; a small POOL of parallel platforms hangs off the ring, and returning trains
+# compete for a free one (queueing on the ring / their spokes). Kept deadlock-free by the
+# chain-signal engine: a train may pass a chain signal (onto the ring / into a platform)
+# only if it can atomically reserve the run to a free safe-stop beyond, so it never stops
+# inside a junction and the ring can never saturate (admission is gated on a free platform).
+STATION_RING_R = 46                # radius of the one-way approach ring
+STATION_RING_ARCS = 18             # arc blocks around the ring (>= 2*STATION_PLATFORMS)
+STATION_PLATFORMS = 6              # shared platform berths trains queue for
+STATION_PLAT_R = 30                # radius the platform stubs pull in to
+CHAIN_MAX_RUN = 8                  # a chain run must reach a plain safe-stop within this many
+                                   # blocks (build-time assert); else reservation over-serializes
 RAIL_GRID = 2                      # rail nodes snap to even tile coords on straights
 LANE_OFFSET = 10                   # gap between the two one-way lanes (tiles); also the
                                    # diameter of the U-turn loops, so trains never turn sharp

@@ -102,6 +102,12 @@ class RailNetwork:
         self.signals: dict[int, Signal] = {}
         self.stations: dict[int, Station] = {}
         self.trunks: dict[int, Trunk] = {}      # shared-track corridors, by sector
+        # central shared station (built by build_station): a one-way approach ring + a pool
+        # of parallel platform sidings that returning trains compete for.
+        self.ring_nodes: list[int] = []
+        self.ring_arc: list[int] = []           # ring_arc[k]: edge from ring_nodes[k] -> k+1
+        self.platforms: list[dict] = []
+        self.station_built: bool = False
         self._nid = 0
         self._eid = 0
         self._bid = 0
@@ -220,7 +226,36 @@ class RailNetwork:
             blk.length = e.length
             e.block_id = blk.id
             kind = "chain" if (i == 0 and chain_at_start) else "rail"
+            if kind == "chain":
+                blk.chain = True                    # arm the chain-signal path reservation
             self.signals.setdefault(e.a, Signal(e.a, kind, self.node_pos(e.a)))
+
+    def _mark_chain(self, edge_ids: list[int]) -> None:
+        """Mark the blocks of these edges as CHAIN (junction) and their entry signals chain."""
+        for eid in edge_ids:
+            e = self.edges.get(eid)
+            if e is None:
+                continue
+            blk = self.blocks.get(e.block_id)
+            if blk is not None:
+                blk.chain = True
+            sig = self.signals.get(e.a)
+            if sig is not None:
+                sig.kind = "chain"
+
+    def _one_block_edge(self, a_pt, b_pt, chain: bool = False) -> tuple[int, int]:
+        """A single straight edge a->b as its own block. Returns (edge_id, b_node)."""
+        an = self.add_node(*a_pt)
+        bn = self.add_node(*b_pt)
+        eid = self._add_edge_poly(an, bn, [tuple(map(float, a_pt)), tuple(map(float, b_pt))])
+        blk = self._new_block()
+        blk.edge_ids.append(eid)
+        blk.length = self.edges[eid].length
+        blk.chain = chain
+        self.edges[eid].block_id = blk.id
+        self.signals.setdefault(an, Signal(an, "chain" if chain else "rail",
+                                           (float(a_pt[0]), float(a_pt[1]))))
+        return eid, bn
 
     # ---- shared-track trunk network ---------------------------------------
     def find_or_make_trunk(self, bearing: float, reach: float) -> tuple[Trunk, bool]:
@@ -250,6 +285,97 @@ class RailNetwork:
         if not self._bearing_clear(bearing):
             return None, False                       # too close to another corridor - refuse
         return self.build_trunk(bearing, reach), True
+
+    # ---- central shared station (one-way ring + parallel platform pool) ---
+    def build_station(self) -> None:
+        """Build the ONE shared central terminal: a CLOCKWISE one-way approach ring with a
+        pool of parallel platform sidings that returning trains compete for. Corridors are
+        wired to merge onto / diverge off the ring at their own bearing (elsewhere). Chain
+        signals on every junction foot make it deadlock-free (see the chain-signal engine)."""
+        g = balance.RAIL_GRID
+        R = float(balance.STATION_RING_R)
+        N = int(balance.STATION_RING_ARCS)
+        P = int(balance.STATION_PLATFORMS)
+        Rp = float(balance.STATION_PLAT_R)
+        tau = 2.0 * math.pi
+        # ring nodes + one-way straight-chord arcs (one block each), rail by default
+        self.ring_nodes = [self.add_node(_snap(math.cos(tau * k / N) * R, g),
+                                         _snap(math.sin(tau * k / N) * R, g))
+                           for k in range(N)]
+        self.ring_arc = []
+        for k in range(N):
+            eid, _ = self._one_block_edge(self.nodes[self.ring_nodes[k]],
+                                          self.nodes[self.ring_nodes[(k + 1) % N]])
+            self.ring_arc.append(eid)
+        # platforms evenly spaced around the ring; each is a bypass siding: diverge at ring
+        # node i -> in-stub (chain) -> platform block (rail, one unload stop) -> out-stub
+        # (chain) -> rejoin at ring node i+1. The bypassed ring arc i is also chain (a train
+        # staying on the ring past this berth is crossing the same merge foot).
+        self.platforms = []
+        step = max(2, N // P)
+        L = float(balance.MAX_TRAIN_LEN + balance.JUNCTION_CLEAR + 2)
+        for p in range(P):
+            i = (p * step) % N
+            j = (i + 1) % N
+            ni, nj = self.ring_nodes[i], self.ring_nodes[j]
+            th_i, th_j = tau * i / N, tau * j / N
+            th_m = th_i + (((th_j - th_i + math.pi) % tau) - math.pi) * 0.5
+            ux, uy = math.cos(th_m), math.sin(th_m)
+            tx, ty = -uy, ux                                       # platform track direction
+            cxp, cyp = ux * Rp, uy * Rp
+            pA = (cxp - tx * L * 0.5, cyp - ty * L * 0.5)
+            pB = (cxp + tx * L * 0.5, cyp + ty * L * 0.5)
+            in_poly = _hermite(self.nodes[ni], (-math.sin(th_i), math.cos(th_i)), pA, (tx, ty))
+            out_poly = _hermite(pB, (tx, ty), self.nodes[nj], (-math.sin(th_j), math.cos(th_j)))
+            in_e = self._polyline_to_edges([tuple(map(float, self.nodes[ni]))] + in_poly[1:])
+            plat_e, plat_b = self._one_block_edge(pA, pB)          # the platform (a safe stop)
+            out_e = self._polyline_to_edges([pB] + out_poly[1:])
+            self._signalize(in_e)
+            self._signalize(out_e)
+            self._mark_chain(in_e)
+            self._mark_chain(out_e)
+            self._mark_chain([self.ring_arc[i]])
+            st = self._add_station("platform", self.nodes[plat_b], kind="unload", is_home=True)
+            self.platforms.append({
+                "ring_in": i, "ring_out": j, "in_edges": in_e, "plat_edge": plat_e,
+                "plat_block": self.edges[plat_e].block_id, "station_id": st.id, "out_edges": out_e,
+            })
+        self.station_built = True
+
+    def nearest_ring_index(self, bearing: float) -> int:
+        """Ring node index nearest to `bearing` (where a corridor at that bearing attaches)."""
+        n = len(self.ring_nodes)
+        best_i, best_d = 0, math.inf
+        for k in range(n):
+            nx, ny = self.nodes[self.ring_nodes[k]]
+            d = abs((math.atan2(ny, nx) - bearing + math.pi) % (2 * math.pi) - math.pi)
+            if d < best_d:
+                best_d, best_i = d, k
+        return best_i
+
+    def ring_arc_path(self, i: int, j: int) -> list[int]:
+        """Clockwise ring-arc edge ids from ring node i round to ring node j (empty if i==j)."""
+        n = len(self.ring_arc)
+        out, k = [], i % n
+        while k != j % n:
+            out.append(self.ring_arc[k])
+            k = (k + 1) % n
+        return out
+
+    def pick_platform(self, from_index: int, exclude=()):
+        """The nearest-clockwise platform whose platform block AND in-stub are all free, from
+        ring node `from_index`. Advisory only - the atomic chain reservation is the real claim,
+        so two trains racing the same berth resolve safely (the loser re-picks)."""
+        n = len(self.ring_nodes)
+        order = sorted(self.platforms,
+                       key=lambda pf: (pf["ring_in"] - from_index) % n)
+        for pf in order:
+            if pf["station_id"] in exclude:
+                continue
+            blocks = [pf["plat_block"]] + [self.edges[e].block_id for e in pf["in_edges"]]
+            if all(self.blocks[b].occupant is None for b in blocks if b in self.blocks):
+                return pf
+        return None
 
     def _bearing_clear(self, bearing: float) -> bool:
         """True if a new RADIAL loop along `bearing` would stay at least TRUNK_MERGE_DEG
