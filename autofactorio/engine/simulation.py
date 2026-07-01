@@ -745,6 +745,7 @@ class Simulation:
         self.economy.research_fuel_mult = self.research.fuel_efficiency
         self.economy.nuclear_fuel_unlocked = self.research.nuclear_fuel_unlocked
         self.economy.fusion_fuel_unlocked = self.research.fusion_fuel_unlocked
+        self.economy.nuclear_plant_unlocked = self.research.nuclear_plant_unlocked
 
     def build_assembler(self, n: int = 1) -> tuple[bool, str]:
         if not self.economy.spend({"assembler": n}):
@@ -759,6 +760,32 @@ class Simulation:
         self.economy.furnaces += n
         self.log(f"Deployed {n} furnace(s); home now has {self.economy.furnaces}.")
         return True, f"furnaces now {self.economy.furnaces}"
+
+    def build_power_plant(self, kind: str = "boiler", n: int = 1) -> tuple[bool, str]:
+        """Deploy power plants. Boilers burn the carbon fuel ladder (baseline); NUCLEAR
+        plants burn plutonium and generate ~50x per plant, freeing carbon for the trains -
+        but need the Nuclear Power tech AND a plutonium supply (refined from mined uranium)."""
+        kind = kind if kind in balance.POWER_PLANT_GEN else "boiler"
+        n = max(1, int(n))
+        if kind == "nuclear" and not self.research.nuclear_plant_unlocked:
+            return False, f"nuclear plants need the Nuclear Power tech (L{balance.NUCLEAR_PLANT_TECH})"
+        if not self.economy.build_power_plant(kind, n):
+            cost = {k: v * n for k, v in balance.POWER_PLANT_COST[kind].items()}
+            missing = {k: v for k, v in cost.items() if self.economy.inv.get(k, 0) < v}
+            return False, f"insufficient materials for {kind} plant: need {missing}"
+        cap = self.economy.power_plants[kind] * balance.POWER_PLANT_GEN[kind]
+        self.log(f"Built {n} {kind} plant(s); {kind} capacity now {cap:.0f} e/s "
+                 f"({self.economy.power_plants[kind]} plants).")
+        return True, f"{kind} plants now {self.economy.power_plants[kind]}"
+
+    def set_factories(self, fraction: float) -> tuple[bool, str]:
+        """Load-shed: keep `fraction` (0..1) of the factories online. Idle factories draw no
+        power, so this conserves fuel for the trains during a shortage (they fetch more coal/
+        uranium); raise it back to 1.0 once fuel recovers."""
+        f = self.economy.set_factory_online(fraction)
+        self.log(f"Factories set to {int(round(f * 100))}% online "
+                 f"({'conserving fuel for trains' if f < 0.99 else 'full production'}).")
+        return True, f"factories {int(round(f * 100))}% online"
 
     def build_storage(self, item: str, n: int = 1) -> tuple[bool, str]:
         """Expand the storage for ONE resource (its own location - coal storage is
@@ -836,7 +863,13 @@ class Simulation:
             "ships_launched": self.ships_launched,
             "power_demand": self.economy.power_demand,
             "power_supplied": self.economy.power_supplied,
+            "power_capacity": self.economy.power_capacity,
             "power_factor": self.economy.power_factor,
+            "gen_nuclear": self.economy.gen_nuclear,
+            "gen_boiler": self.economy.gen_boiler,
+            "boilers": self.economy.power_plants.get("boiler", 0),
+            "nuclear_plants": self.economy.power_plants.get("nuclear", 0),
+            "factory_online": self.economy.factory_online,
             "fuel_rate": self.economy.fuel_rate,
             "burning": self.economy.burning,
             "fuel_seconds_left": self.economy.seconds_to_empty(),

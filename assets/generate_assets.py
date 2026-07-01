@@ -27,10 +27,11 @@ TILE = 64
 # Canonical sprite list. Keys are the filenames (without .png) the renderer asks for.
 SPRITE_NAMES = [
     "grass",
-    "ore_iron", "ore_copper", "ore_coal", "ore_stone",
+    "ore_iron", "ore_copper", "ore_coal", "ore_stone", "ore_uranium",
     "mining_drill",
     "smelter",
     "assembler",
+    "boiler", "nuclear_plant",
     "hq",
     "train_stop",
     "locomotive", "locomotive_2", "locomotive_3", "locomotive_4",
@@ -52,6 +53,8 @@ PAL = {
     "copper": (200, 118, 64), "copper_d": (150, 80, 40),
     "coal": (44, 44, 50), "coal_d": (24, 24, 28),
     "stone": (176, 162, 130), "stone_d": (132, 120, 92),
+    "uranium": (132, 224, 104), "uranium_d": (74, 150, 68),   # glowing green reactor ore
+    "glow": (150, 240, 120),
     "metal": (96, 100, 108), "metal_d": (60, 63, 70), "metal_l": (140, 144, 152),
     "hazard": (224, 188, 40),
     "ember": (255, 150, 40),
@@ -190,6 +193,50 @@ def draw_assembler(name) -> pygame.Surface:
         y = cy + int(15 * math.sin(a))
         pygame.draw.circle(s, PAL["hazard"], (x, y), 3)
     pygame.draw.circle(s, PAL["outline"], (cx, cy), 13, 2)
+    return s
+
+
+def draw_boiler(name) -> pygame.Surface:
+    """A squat steam boiler: metal tank, glowing firebox, chimney + steam puff."""
+    s = _new()
+    body = pygame.Rect(12, 22, TILE - 24, TILE - 34)
+    pygame.draw.rect(s, PAL["outline"], body.inflate(2, 2), border_radius=8)
+    pygame.draw.rect(s, PAL["metal"], body, border_radius=8)
+    pygame.draw.rect(s, PAL["metal_l"], (body.x, body.y, body.w, 7), border_radius=8)
+    fb = pygame.Rect(0, 0, body.w - 12, 8)
+    fb.center = (TILE // 2, body.bottom - 5)
+    pygame.draw.rect(s, PAL["ember"], fb, border_radius=2)
+    pygame.draw.rect(s, PAL["ember_hot"], fb.inflate(-6, -3), border_radius=2)
+    pygame.draw.rect(s, PAL["metal_d"], (TILE // 2 - 4, 8, 8, 16))       # chimney
+    pygame.draw.circle(s, (210, 212, 216), (TILE // 2, 8), 5)            # steam
+    pygame.draw.circle(s, (228, 230, 234), (TILE // 2 + 3, 5), 3)
+    return s
+
+
+def draw_nuclear_plant(name) -> pygame.Surface:
+    """A reactor: a glowing-green containment dome (bright so it reads on the grey concourse)
+    with a radiation trefoil - the unmistakable power backbone of the endgame base."""
+    s = _new()
+    cx, cy = TILE // 2, TILE // 2 + 2
+    # soft green glow halo so it pops against grey pavement
+    for rr, a in ((28, 45), (23, 80), (18, 130)):
+        halo = pygame.Surface((TILE, TILE), pygame.SRCALPHA)
+        pygame.draw.circle(halo, (*PAL["glow"], a), (cx, cy), rr)
+        s.blit(halo, (0, 0))
+    dome = pygame.Rect(9, 14, TILE - 18, TILE - 20)
+    pygame.draw.ellipse(s, PAL["outline"], dome.inflate(2, 2))
+    pygame.draw.ellipse(s, PAL["uranium_d"], dome)                 # green dome (not grey)
+    pygame.draw.ellipse(s, PAL["uranium"], (dome.x, dome.y, dome.w, dome.h // 2))
+    pygame.draw.circle(s, PAL["glow"], (cx, cy), 11)               # bright core
+    pygame.draw.circle(s, (235, 255, 210), (cx, cy), 6)
+    for k in range(3):                                             # radiation trefoil
+        a = k * 2 * math.pi / 3 - math.pi / 2
+        x, y = cx + int(9 * math.cos(a)), cy + int(9 * math.sin(a))
+        pygame.draw.polygon(s, PAL["outline"], [
+            (cx, cy),
+            (x + int(6 * math.cos(a + 0.55)), y + int(6 * math.sin(a + 0.55))),
+            (x + int(6 * math.cos(a - 0.55)), y + int(6 * math.sin(a - 0.55)))])
+    pygame.draw.circle(s, PAL["outline"], (cx, cy), 3)
     return s
 
 
@@ -359,9 +406,12 @@ _DRAW = {
     "ore_copper": lambda n: _ore(n, PAL["copper"], PAL["copper_d"]),
     "ore_coal": lambda n: _ore(n, PAL["coal"], PAL["coal_d"]),
     "ore_stone": lambda n: _ore(n, PAL["stone"], PAL["stone_d"]),
+    "ore_uranium": lambda n: _ore(n, PAL["uranium"], PAL["uranium_d"]),
     "mining_drill": draw_mining_drill,
     "smelter": draw_smelter,
     "assembler": draw_assembler,
+    "boiler": draw_boiler,
+    "nuclear_plant": draw_nuclear_plant,
     "hq": draw_hq,
     "train_stop": draw_train_stop,
     "locomotive": draw_locomotive,

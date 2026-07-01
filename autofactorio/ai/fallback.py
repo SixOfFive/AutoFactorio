@@ -66,6 +66,45 @@ def decide(sim, report) -> dict:
         spend(balance.STORAGE_COST)
         why.append(f"{balance.DISPLAY_NAME.get(item, item)} storage")
 
+    # 2b. POWER: keep generation ahead of demand, shed load under a fuel crunch, go nuclear.
+    tte = eco.seconds_to_empty()
+    stalled = stats["stalled_trains"]
+    # emergency load-shed: if the trains are being starved of fuel, idle most factories so
+    # the fuel goes to the trains (they fetch more coal/uranium); restore once fuel recovers.
+    if (tte < 90 or stalled) and eco.factory_online > 0.35:
+        actions.append({"action": "set_factories", "fraction": 0.3})
+        why.append("shed factory load (low fuel -> feed trains)")
+    elif eco.factory_online < 0.99 and tte > 240 and not stalled:
+        actions.append({"action": "set_factories", "fraction": 1.0})
+        why.append("restore factories (fuel recovered)")
+    # build NUCLEAR plants once unlocked + fuelable (efficient; powers the base off plutonium
+    # and frees the carbon supply for trains) - the REAL fix, so prefer them and build enough
+    # to cover demand. Boilers only fill whatever nuclear hasn't (baseline / pre-nuclear).
+    ngen = balance.POWER_PLANT_GEN["nuclear"]
+    has_uranium = (eco.inv.get("plutonium", 0) > 0 or eco.inv.get("uranium_ore", 0) > 0
+                   or any(f.patch.ore == "uranium_ore" for f in sim.fields.values()))
+    built_nuc = 0
+    if sim.research.nuclear_plant_unlocked and has_uranium:
+        target = int(math.ceil(eco.power_demand / ngen)) + 1     # (over)cover demand w/ reactors
+        while (stats["nuclear_plants"] + built_nuc < max(1, target)
+               and afford(balance.POWER_PLANT_COST["nuclear"])):
+            actions.append({"action": "build_power_plant", "kind": "nuclear", "count": 1})
+            spend(balance.POWER_PLANT_COST["nuclear"])
+            built_nuc += 1
+        if built_nuc:
+            why.append(f"+{built_nuc} nuclear plant(s)")
+    # boilers to cover any capacity gap nuclear hasn't (cheap, immediate baseline power)
+    projected_cap = eco.power_capacity + built_nuc * ngen
+    gap = eco.power_demand * 1.1 - projected_cap
+    if gap > 0:
+        n = min(8, max(1, int(math.ceil(gap / balance.POWER_PLANT_GEN["boiler"]))))
+        while n > 0 and not afford({k: v * n for k, v in balance.POWER_PLANT_COST["boiler"].items()}):
+            n -= 1
+        if n > 0:
+            actions.append({"action": "build_power_plant", "kind": "boiler", "count": n})
+            spend({k: v * n for k, v in balance.POWER_PLANT_COST["boiler"].items()})
+            why.append(f"+{n} boiler(s) (power capped)")
+
     # 3. research the moment it's affordable (it compounds the WHOLE empire)
     nxt = sim.research.next_tech()
     if nxt is not None and afford(nxt["cost"]):
@@ -103,6 +142,13 @@ def decide(sim, report) -> dict:
             p = next((p for p in patches if p.ore == ore), None)
             if p:
                 try_claim(p, f"secure {ore.replace('_', ' ')}")
+    # once Nuclear Power is researched, secure a URANIUM field so the base can refine
+    # plutonium to fuel nuclear plants (the frontier prize that powers the endgame)
+    if sim.research.nuclear_plant_unlocked and ore_fields.get("uranium_ore", 0) == 0 \
+            and eco.inv.get("uranium_ore", 0) == 0 and eco.inv.get("plutonium", 0) == 0:
+        p = next((p for p in patches if p.ore == "uranium_ore"), None)
+        if p:
+            try_claim(p, "secure uranium (nuclear fuel)")
     # coal now powers the whole base (and trains) - grab MORE coal under fuel pressure
     if eco.inv.get("coal", 0) < balance.FUEL_CRITICAL * 4 or eco.power_factor < 0.95:
         p = next((p for p in patches if p.ore == "coal" and p.id not in claimed), None)

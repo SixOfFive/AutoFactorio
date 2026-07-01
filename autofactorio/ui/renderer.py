@@ -113,7 +113,7 @@ class Renderer:
 
     # ---- layers -----------------------------------------------------------
     _ORE_SPRITE = {"iron_ore": "ore_iron", "copper_ore": "ore_copper",
-                   "coal": "ore_coal", "stone": "ore_stone"}
+                   "coal": "ore_coal", "stone": "ore_stone", "uranium_ore": "ore_uranium"}
 
     def _patches(self, screen, cam, sim):
         for p in sim.world.patches:
@@ -267,8 +267,18 @@ class Renderer:
                             radii=(4.5, 9.0, 13.5), per_ring=12, phase=0.0)
         self._factory_rings(screen, cam, "assembler", sim.economy.assemblers,
                             radii=(6.8, 11.3, 15.8), per_ring=12, phase=0.3)
+        # power PLANTS ring outside the factory: boilers (small) + nuclear plants (bigger,
+        # glowing green) - the base visibly grows a power grid as the director scales it.
+        self._factory_rings(screen, cam, "boiler",
+                            sim.economy.power_plants.get("boiler", 0),
+                            radii=(19.0, 22.0, 25.0), per_ring=18, phase=0.15, size=1.4)
+        # nuclear plants get their OWN prominent ring on the apron (bigger, glowing) so a
+        # "dozen nuclear plants" reads clearly as the base's power backbone
+        self._factory_rings(screen, cam, "nuclear_plant",
+                            sim.economy.power_plants.get("nuclear", 0),
+                            radii=(34.0, 39.0), per_ring=12, phase=0.26, size=4.2)
 
-    def _factory_rings(self, screen, cam, sprite, count, radii, per_ring, phase):
+    def _factory_rings(self, screen, cam, sprite, count, radii, per_ring, phase, size=1.6):
         count = min(count, per_ring * len(radii))
         placed = 0
         for ri, r in enumerate(radii):
@@ -277,7 +287,7 @@ class Renderer:
                 break
             for i in range(n):
                 a = i / per_ring * 2 * math.pi + phase + ri * 0.26
-                self._blit(screen, cam, sprite, math.cos(a) * r, math.sin(a) * r, 1.6)
+                self._blit(screen, cam, sprite, math.cos(a) * r, math.sin(a) * r, size)
             placed += n
 
     # locomotive / wagon sprite sets, indexed by train.variant (graphic variety)

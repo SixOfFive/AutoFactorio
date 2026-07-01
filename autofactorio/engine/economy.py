@@ -32,6 +32,7 @@ _BUILD_ORDER = [
     "assembler", "cargo_wagon", "locomotive",  # rolling stock so it actually gets made
     # refine coal up the fuel ladder for building POWER + train range (top tiers gated):
     "compressed_coal", "refined_fuel", "nuclear_fuel", "fusion_fuel",
+    "plutonium",        # refine mined uranium into reactor fuel (gated by nuclear tech)
     "science_pack",     # made from surplus circuits/plates; fuels research
 ]
 _FUEL_CHAIN = ("compressed_coal", "refined_fuel", "nuclear_fuel", "fusion_fuel")
@@ -54,6 +55,12 @@ class Economy:
         self.furnaces = balance.HOME_START["furnaces"]
         self.furnace_tier = "stone"
         self.assemblers = balance.HOME_START["assemblers"]
+        # power PLANTS generate energy the factories consume (boilers burn the carbon fuel
+        # ladder trains also use; nuclear plants burn plutonium and put out ~50x per plant).
+        self.power_plants = {"boiler": balance.HOME_START.get("boilers", 0), "nuclear": 0}
+        # load-shedding: fraction of factories kept ONLINE (0..1). The director drops this
+        # to conserve fuel for trains during a shortage (idle factories burn no power).
+        self.factory_online = 1.0
         self._smelt_bank = 0.0
         self._craft_bank = 0.0
         # research multipliers, pushed in by the Simulation each tick
@@ -63,13 +70,18 @@ class Economy:
         self.research_fuel_mult = 1.0       # fuel-efficiency (run-seconds per fuel unit)
         self.nuclear_fuel_unlocked = False  # nuclear-fuel refining researched yet?
         self.fusion_fuel_unlocked = False   # fusion-fuel refining researched yet?
-        # power: buildings burn fuel to run; these are refreshed each tick by update()
-        self._energy_bank = 0.0             # buffered energy from burnt fuel
-        self.power_demand = 0.0             # energy/sec all buildings want
+        self.nuclear_plant_unlocked = False # nuclear PLANTS + plutonium refining researched yet?
+        # power: plants generate, factories consume; refreshed each tick by update()
+        self._nuc_bank = 0.0                # buffered energy from burnt plutonium (nuclear)
+        self._boi_bank = 0.0                # buffered energy from burnt carbon fuel (boilers)
+        self.power_demand = 0.0             # energy/sec the online factories want
         self.power_supplied = 0.0           # energy/sec actually delivered (<= demand)
         self.power_factor = 1.0             # supplied/demand this tick (1 = fully powered)
-        self.fuel_rate = 0.0                # fuel UNITS/sec being burnt (smoothed, for HUD)
-        self.burning = "coal"               # which fuel tier is currently being burnt
+        self.power_capacity = 0.0           # energy/sec all plants COULD generate (if fuelled)
+        self.gen_nuclear = 0.0              # energy/sec currently from nuclear plants (plutonium)
+        self.gen_boiler = 0.0               # energy/sec currently from boilers (carbon fuel)
+        self.fuel_rate = 0.0                # carbon fuel UNITS/sec boilers burn (smoothed, HUD)
+        self.burning = "coal"               # which carbon tier boilers are currently burning
         self.total_smelted = 0
         self.total_crafted = 0
 
@@ -138,44 +150,85 @@ class Economy:
 
     # ---- power ------------------------------------------------------------
     def power_status(self, dt: float) -> float:
-        """Draw the tick's power from fuel and return the power FACTOR (0..1): how much
-        of the buildings' demand the available fuel can meet. Burns the DENSEST fuel in
-        stock first (coal is a poor, penalized last resort), buffering energy so whole
-        units aren't wasted. At 0 factor the base has no fuel and everything is off."""
+        """Generate the tick's power from the PLANTS and return the power FACTOR (0..1): how
+        much of the online factories' demand the plants can meet. NUCLEAR plants generate
+        first - burning PLUTONIUM, a reactor-only fuel trains never touch - up to their
+        capacity; BOILERS then fill the remainder from the CARBON ladder (coal penalized),
+        the SAME pool the trains draw, which is why heavy boiler load starves the trains.
+        So powering the base off nuclear plants frees the whole carbon supply for trains -
+        the fix for the energy problem. Each source is rate-capped by its installed plant
+        capacity (dense fuel is buffered per-source and released at that rate). At 0 usable
+        generation everything is off."""
+        online = max(0.0, min(1.0, self.factory_online))
         self.power_demand = (self.furnaces * balance.POWER_PER_FURNACE
-                             + self.assemblers * balance.POWER_PER_ASSEMBLER)
+                             + self.assemblers * balance.POWER_PER_ASSEMBLER) * online
+        ncap = self.power_plants.get("nuclear", 0) * balance.POWER_PLANT_GEN["nuclear"]
+        bcap = self.power_plants.get("boiler", 0) * balance.POWER_PLANT_GEN["boiler"]
+        self.power_capacity = ncap + bcap
         need = self.power_demand * dt
+        mult = self.research_fuel_mult
         if need <= 0:
             self.power_factor = 1.0
-            self.power_supplied = 0.0
-            self.fuel_rate = 0.0
+            self.power_supplied = self.gen_nuclear = self.gen_boiler = self.fuel_rate = 0.0
             return 1.0
-        burnt_units = 0.0
-        while self._energy_bank < need:
-            fuel = next((f for f in balance.FUEL_ORDER if self.inv.get(f, 0) > 0), None)
+        # 1) nuclear plants (plutonium), rate-capped at ncap
+        want_n = min(ncap * dt, need)
+        while self._nuc_bank < want_n and self.inv.get(balance.NUCLEAR_PLANT_FUEL, 0) > 0:
+            self.inv[balance.NUCLEAR_PLANT_FUEL] -= 1
+            self._nuc_bank += balance.PLUTONIUM_ENERGY * mult
+        s_n = min(want_n, self._nuc_bank)
+        self._nuc_bank -= s_n
+        # 2) boilers (carbon ladder, densest first), rate-capped at bcap, for the remainder
+        want_b = min(bcap * dt, need - s_n)
+        units = 0
+        while self._boi_bank < want_b:
+            fuel = next((f for f in balance.BOILER_FUELS if self.inv.get(f, 0) > 0), None)
             if fuel is None:
-                break                                    # out of fuel
+                break
             self.inv[fuel] -= 1
-            self._energy_bank += balance.FUEL_POWER[fuel] * self.research_fuel_mult
-            burnt_units += 1
+            self._boi_bank += balance.FUEL_POWER[fuel] * mult
+            units += 1
             self.burning = fuel
-        factor = 1.0 if self._energy_bank >= need else (self._energy_bank / need)
-        drawn = min(self._energy_bank, need)
-        self._energy_bank -= drawn
-        # don't hoard more than a couple of fusion units of buffered energy
-        self._energy_bank = min(self._energy_bank, balance.FUEL_POWER["fusion_fuel"] * 2)
+        s_b = min(want_b, self._boi_bank)
+        self._boi_bank -= s_b
+        # don't hoard more than a couple of dense units of buffered energy per source
+        self._nuc_bank = min(self._nuc_bank, balance.PLUTONIUM_ENERGY * mult * 2)
+        self._boi_bank = min(self._boi_bank, balance.FUEL_POWER["fusion_fuel"] * mult * 2)
+        supplied = s_n + s_b
+        factor = 1.0 if supplied >= need else (supplied / need if need > 0 else 1.0)
         self.power_factor = factor
         self.power_supplied = self.power_demand * factor
-        self.fuel_rate = burnt_units / dt if dt > 0 else 0.0
+        self.gen_nuclear = s_n / dt if dt > 0 else 0.0
+        self.gen_boiler = s_b / dt if dt > 0 else 0.0
+        self.fuel_rate = units / dt if dt > 0 else 0.0
         return factor
 
+    def build_power_plant(self, kind: str, n: int = 1) -> bool:
+        """Deploy n power plants of `kind`, spending their raw materials. Returns success
+        (the tech gate for nuclear plants is enforced by the caller in Simulation)."""
+        if kind not in balance.POWER_PLANT_GEN:
+            return False
+        cost = {k: v * n for k, v in balance.POWER_PLANT_COST[kind].items()}
+        if not self.spend(cost):
+            return False
+        self.power_plants[kind] = self.power_plants.get(kind, 0) + n
+        return True
+
+    def set_factory_online(self, fraction: float) -> float:
+        """Load-shedding: keep this FRACTION (0..1) of factories running; idle ones draw no
+        power (and produce nothing), so fuel is conserved for the trains. Returns the value set."""
+        self.factory_online = max(0.0, min(1.0, float(fraction)))
+        return self.factory_online
+
     def fuel_energy_stock(self) -> float:
-        """Total building-power energy currently stored across all fuel tiers."""
-        return sum(self.inv.get(f, 0) * balance.FUEL_POWER[f] * self.research_fuel_mult
-                   for f in balance.FUEL_TIERS)
+        """Total building-power energy currently stored: the carbon ladder (boilers) PLUS
+        plutonium (nuclear)."""
+        carbon = sum(self.inv.get(f, 0) * balance.FUEL_POWER[f] for f in balance.FUEL_TIERS)
+        pluto = self.inv.get(balance.NUCLEAR_PLANT_FUEL, 0) * balance.PLUTONIUM_ENERGY
+        return (carbon + pluto) * self.research_fuel_mult
 
     def seconds_to_empty(self) -> float:
-        """How long the current power demand can run on the fuel in stock (no refills).
+        """How long current factory power demand can run on the fuel in stock (no refills).
         inf if nothing is drawing power."""
         if self.power_demand <= 0:
             return float("inf")
@@ -183,19 +236,21 @@ class Economy:
 
     # ---- production -------------------------------------------------------
     def update(self, dt: float) -> None:
-        # buildings need POWER: fuel is burnt to meet demand and throughput scales with
-        # how much of it is met (0 = unpowered = idle). Refined fuel goes MUCH further.
+        # factories need POWER from the plants, and only the ONLINE fraction runs; throughput
+        # scales by both (0 power OR 0 online => idle). power_status already scaled demand by
+        # factory_online, so `run` = how much of the full factory throughput actually happens.
         power = self.power_status(dt)
+        run = power * max(0.0, min(1.0, self.factory_online))
         # smelting & crafting throughput scale with research AND available power; the
         # bank cap scales too, else a tiny per-tick cap would throttle the multipliers.
         fmult = self.research_furnace_mult
         self._smelt_bank = min(self._smelt_bank
                                + self.furnaces * balance.FURNACE_SPEED[self.furnace_tier]
-                               * fmult * power * dt,
+                               * fmult * run * dt,
                                _SMELT_BANK_CAP * max(1.0, fmult))
         self._smelt()
         cmult = self.research_craft_mult
-        self._craft_bank = min(self._craft_bank + self.assemblers * cmult * power * dt,
+        self._craft_bank = min(self._craft_bank + self.assemblers * cmult * run * dt,
                                _CRAFT_BANK_CAP * max(1.0, cmult))
         self._craft()
 
@@ -232,6 +287,8 @@ class Economy:
                 if item == "nuclear_fuel" and not self.nuclear_fuel_unlocked:
                     continue
                 if item == "fusion_fuel" and not self.fusion_fuel_unlocked:
+                    continue
+                if item == "plutonium" and not self.nuclear_plant_unlocked:
                     continue
                 if item in _FUEL_CHAIN and self.inv.get("coal", 0) <= balance.FUEL_COAL_RESERVE:
                     continue

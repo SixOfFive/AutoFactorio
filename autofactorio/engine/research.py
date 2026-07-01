@@ -74,6 +74,11 @@ class Research:
         return self.level >= balance.FUSION_FUEL_TECH
 
     @property
+    def nuclear_plant_unlocked(self) -> bool:
+        """Nuclear power plants + plutonium refining are researched."""
+        return self.level >= balance.NUCLEAR_PLANT_TECH
+
+    @property
     def spaceflight(self) -> bool:
         return self.level >= balance.SPACE_TECH_LEVEL
 

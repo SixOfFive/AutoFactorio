@@ -49,6 +49,19 @@ Valid actions (use the exact "action" names and integer ids from the report):
                                               (report shows "depleted":true); salvages its train.
 - {"action":"build_furnace","count":N}        deploy furnaces from stock to smelt faster.
 - {"action":"build_assembler","count":N}      deploy assemblers from stock to craft faster.
+- {"action":"build_power_plant","kind":"boiler"|"nuclear","count":N}   deploy POWER PLANTS.
+                                              Factories consume power that PLANTS generate;
+                                              if capacity < demand (flag POWER_CAPPED) they
+                                              throttle. BOILERS are cheap but burn the carbon
+                                              fuel ladder trains also need. NUCLEAR plants
+                                              (flag NUCLEAR_UNLOCKED) burn PLUTONIUM and make
+                                              ~50x per plant - build these + supply plutonium
+                                              to power everything and FREE the coal for trains.
+- {"action":"set_factories","fraction":F}     load-shed: keep fraction F (0.0-1.0) of factories
+                                              ONLINE. On LOW_FUEL, DROP it (e.g. 0.3) so idle
+                                              factories stop burning fuel and the trains stay
+                                              fuelled to fetch more coal/uranium; raise back to
+                                              1.0 once fuel recovers.
 - {"action":"expand_drills","field_id":N,"count":N}  add drills to a field.
 - {"action":"build_storage","item":"<name>"}  expand storage for ONE resource (e.g.
                                               "coal","iron_ore","iron_plate"). Storage is
@@ -74,24 +87,33 @@ Never "wait" if anything useful is affordable.
 
 Each turn, in priority order:
 1. SAFETY: abandon ONLY fields with "depleted":true (recovers their train). COAL IS
-   CRITICAL - it fuels trains AND powers every building (factories throttle/shut down
-   without fuel). On NO_COAL_FIELD / LOW_COAL / LOW_POWER / LOW_FUEL, claim coal
-   patch(es) at once so supply never runs dry. (The base auto-refines coal up the
-   power ladder - compressed coal -> fuel -> nuclear -> fusion - for far more energy
-   per unit; you just keep coal coming and RESEARCH to unlock the nuclear/fusion tiers,
-   see power.nuclear_unlocked/fusion_unlocked.) Secure iron early. If STORAGE_FULL,
+   CRITICAL - it fuels trains AND (via boilers) powers buildings. On NO_COAL_FIELD /
+   LOW_COAL, claim coal patch(es) at once. Secure iron early. If STORAGE_FULL,
    build_storage for EACH item in "storage_full". Build a robot on WILDLIFE_PRESSURE/
    DAMAGED_TRAINS when robots.can_build.
-2. EXPAND HARD: claim EVERY patch with "affordable":true this turn (multiple
+2. POWER: factories draw power that PLANTS generate (power.capacity vs power.demand).
+   - POWER_CAPPED (capacity < demand): build_power_plant to add capacity.
+   - LOW_FUEL / TRAINS_STALLED_NO_FUEL: the trains are being starved of fuel (boilers are
+     eating it). IMMEDIATELY set_factories with a low fraction (e.g. 0.3) to conserve fuel
+     for the trains, secure/deliver more coal, then set_factories 1.0 once fuel recovers.
+   - The base auto-refines coal up the ladder (compressed -> fuel -> nuclear -> fusion);
+     RESEARCH toward "Nuclear Power" (power.nuclear_plant_unlocked). Once NUCLEAR_UNLOCKED:
+     claim a URANIUM field (NO_URANIUM_FIELD) - the base refines uranium into PLUTONIUM -
+     and build_power_plant kind=nuclear. A few nuclear plants power the whole base off
+     plutonium, FREEING coal for the trains: the real fix for the energy problem. Keep
+     plutonium flowing (NEED_PLUTONIUM = idle reactors).
+3. EXPAND HARD: claim EVERY patch with "affordable":true this turn (multiple
    build_field actions), favoring ore types you have fewest of. Patches near an existing
    corridor JOIN it (denser network, no extra train); patches in fresh directions open new
    corridors - both are good, so grab them all. Add drills (expand_drills) to your
    productive fields to mine a field out faster.
-3. SCALE PRODUCTION to match intake: if ORE_BACKING_UP, smelting is the bottleneck -
+4. SCALE PRODUCTION to match intake: if ORE_BACKING_UP, smelting is the bottleneck -
    build_furnace (a handful, count ~4-6). If PLATES_BACKING_UP, crafting is -
    build_assembler (count ~3-4). Keep adding as long as those flags persist so
-   processing races to keep up; both scale without limit as the empire grows.
-4. RESEARCH whenever research.next.affordable is true (it compounds - huge long-term).
+   processing races to keep up; both scale without limit as the empire grows. Each factory
+   you add RAISES power demand, so keep building_power_plant ahead of POWER_CAPPED.
+5. RESEARCH whenever research.next.affordable is true (it compounds - huge long-term);
+   prioritize reaching Nuclear Power so you can build nuclear plants.
 
 Output ONLY the JSON object, with as many actions as you can afford. JSON only."""
 

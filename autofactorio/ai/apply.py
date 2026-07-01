@@ -23,6 +23,10 @@ def apply_actions(sim, actions: list[dict]) -> list[str]:
                 ok, msg = sim.build_assembler(max(1, a.get("count", 1)))
             elif name == "build_furnace":
                 ok, msg = sim.build_furnace(max(1, a.get("count", 1)))
+            elif name == "build_power_plant":
+                ok, msg = sim.build_power_plant(a.get("kind", "boiler"), max(1, a.get("count", 1)))
+            elif name == "set_factories":
+                ok, msg = sim.set_factories(a["fraction"])
             elif name == "expand_drills":
                 ok, msg = sim.expand_drills(a["field_id"], max(1, a.get("count", 2)))
             elif name == "build_storage":

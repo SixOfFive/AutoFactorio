@@ -13,6 +13,7 @@ from .. import balance
 _INV_KEYS = [
     "iron_plate", "copper_plate", "steel_plate", "stone", "coal",
     "compressed_coal", "refined_fuel", "nuclear_fuel", "fusion_fuel",
+    "uranium_ore", "plutonium",
     "rail", "rail_signal", "train_stop", "electric_drill", "burner_drill",
     "stone_furnace", "assembler", "locomotive", "cargo_wagon",
 ]
@@ -73,12 +74,25 @@ def build_report(sim) -> dict:
     if eco.inv.get("coal", 0) < 150:
         flags.append("LOW_COAL")
     if eco.power_factor < 0.9:
-        flags.append("LOW_POWER")               # factories fuel-starved -> get/refine coal
+        # factories can't get enough power. If capacity is the limit, build plants;
+        # otherwise it's a fuel shortage -> secure/refine fuel.
+        flags.append("LOW_POWER")
+        if eco.power_capacity < eco.power_demand * 0.98:
+            flags.append("POWER_CAPPED")         # not enough plants -> build_power_plant
     _tte = eco.seconds_to_empty()
     if _tte < 120:
-        flags.append("LOW_FUEL")                # < 2 min of building power left in stock
+        # < 2 min of building power in stock. Shed factory load (set_factories) to keep the
+        # trains fuelled so they can fetch more coal/uranium, and build nuclear to get off carbon.
+        flags.append("LOW_FUEL")
     if s["stalled_trains"]:
         flags.append("TRAINS_STALLED_NO_FUEL")
+    if eco.nuclear_plant_unlocked:
+        flags.append("NUCLEAR_UNLOCKED")         # can build_power_plant kind=nuclear + refine plutonium
+        if s["nuclear_plants"] > 0 and eco.inv.get("plutonium", 0) == 0 \
+                and eco.inv.get("uranium_ore", 0) == 0:
+            flags.append("NEED_PLUTONIUM")        # idle reactors -> mine uranium / refine plutonium
+    if eco.factory_online < 0.99:
+        flags.append("FACTORIES_THROTTLED")      # load-shedding on; restore with set_factories 1.0
     if not patches:
         flags.append("NO_CLAIMABLE_PATCHES")
     ore_fields = {f.patch.ore for f in sim.fields.values()}
@@ -86,6 +100,9 @@ def build_report(sim) -> dict:
         flags.append("NO_COAL_FIELD")
     if "iron_ore" not in ore_fields:
         flags.append("NO_IRON_FIELD")
+    if eco.nuclear_plant_unlocked and "uranium_ore" not in ore_fields \
+            and eco.inv.get("uranium_ore", 0) == 0 and eco.inv.get("plutonium", 0) == 0:
+        flags.append("NO_URANIUM_FIELD")         # nuclear unlocked but no uranium to fuel reactors
 
     nxt = sim.research.next_tech()
     research = {"level": sim.research.level}
@@ -107,13 +124,20 @@ def build_report(sim) -> dict:
             "ore_delivered_total": sim.delivered_total,
         },
         "power": {
-            "demand": round(eco.power_demand, 1),        # energy/sec buildings need
-            "supplied": round(eco.power_supplied, 1),    # energy/sec fuel is providing
+            "demand": round(eco.power_demand, 1),        # energy/sec online factories need
+            "supplied": round(eco.power_supplied, 1),    # energy/sec plants are providing
+            "capacity": round(eco.power_capacity, 1),    # energy/sec ALL plants could make
             "factor": round(eco.power_factor, 2),        # <1 => factories throttled
-            "burning": eco.burning,                       # current fuel tier being consumed
+            "gen_nuclear": round(eco.gen_nuclear, 1),    # from nuclear plants (plutonium)
+            "gen_boiler": round(eco.gen_boiler, 1),      # from boilers (carbon fuel)
+            "boilers": eco.power_plants.get("boiler", 0),
+            "nuclear_plants": eco.power_plants.get("nuclear", 0),
+            "factory_online": round(eco.factory_online, 2),   # load-shed fraction (1 = all on)
+            "burning": eco.burning,                       # carbon tier boilers are burning
             "seconds_left": (None if _tte == float("inf") else int(_tte)),
-            "nuclear_unlocked": eco.nuclear_fuel_unlocked,
+            "nuclear_fuel_unlocked": eco.nuclear_fuel_unlocked,
             "fusion_unlocked": eco.fusion_fuel_unlocked,
+            "nuclear_plant_unlocked": eco.nuclear_plant_unlocked,
         },
         "fields": fields,
         "available_patches": patches,

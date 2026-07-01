@@ -474,10 +474,11 @@ def test_buildings_need_power_and_stall_without_fuel():
     assert eco.power_factor == 1.0
     assert eco.total_smelted > before                  # smelting ran
 
-    eco.inv["coal"] = 0                                 # cut ALL fuel
+    eco.inv["coal"] = 0                                 # cut ALL carbon fuel the boilers use
     eco.inv["compressed_coal"] = eco.inv["refined_fuel"] = 0
+    eco.inv["nuclear_fuel"] = eco.inv["fusion_fuel"] = 0
     eco.inv["iron_ore"] = 5000
-    eco._energy_bank = 0.0
+    eco._boi_bank = eco._nuc_bank = 0.0                 # drain buffered plant energy
     mid = eco.total_smelted
     for _ in range(int(3 / (1 / 60))):
         eco.update(1 / 60)
@@ -499,6 +500,76 @@ def test_refined_fuel_powers_far_longer_than_coal():
     refined_secs = eco.seconds_to_empty()
     assert refined_secs > coal_secs * 10               # refined lasts vastly longer
     assert eco.power_demand > 0 and 0 < coal_secs < float("inf")
+
+
+def test_nuclear_plant_generates_far_more_and_frees_coal_for_trains():
+    """A nuclear plant puts out ~50x a boiler and burns PLUTONIUM (not the carbon fuel the
+    trains use), so powering the base off nuclear frees the coal supply for the trains."""
+    assert balance.POWER_PLANT_GEN["nuclear"] >= balance.POWER_PLANT_GEN["boiler"] * 20
+    sim = Simulation(Config())
+    sim.research.level = balance.NUCLEAR_PLANT_TECH
+    sim._sync_research()
+    eco = sim.economy
+    eco.inv.clear()
+    eco.inv["plutonium"] = 100
+    eco.inv["coal"] = 5000
+    eco.power_plants = {"boiler": 0, "nuclear": 1}
+    eco.furnaces, eco.assemblers = 500, 0             # 25 e/s demand < one nuclear plant (30)
+    for _ in range(int(10 / (1 / 60))):
+        eco.power_status(1 / 60)
+    assert eco.power_factor > 0.95                    # one nuclear plant powers a big base
+    assert eco.inv["plutonium"] < 100                 # ...by burning plutonium
+    assert eco.inv["coal"] == 5000                    # coal untouched -> all of it for trains
+
+
+def test_disable_factories_conserves_fuel_for_trains():
+    """Load-shedding: idling factories drops power demand to ~0, so boilers stop burning the
+    carbon fuel the trains need."""
+    eco = Simulation(Config()).economy
+    eco.inv.clear()
+    eco.inv["coal"] = 1000
+    eco.furnaces, eco.assemblers = 60, 20
+    for _ in range(int(4 / (1 / 60))):
+        eco.power_status(1 / 60)
+    assert eco.inv["coal"] < 1000                     # online factories burn coal via boilers
+    eco.inv["coal"] = 1000
+    eco.set_factory_online(0.0)                       # shed all load
+    for _ in range(int(4 / (1 / 60))):
+        eco.power_status(1 / 60)
+    assert eco.inv["coal"] == 1000                    # nothing burnt -> saved for the trains
+
+
+def test_plutonium_refined_from_uranium_only_when_unlocked():
+    sim = Simulation(Config())
+    eco = sim.economy
+    eco.inv["uranium_ore"] = 100
+    for _ in range(int(30 / (1 / 60))):
+        eco.update(1 / 60)
+    assert eco.inv.get("plutonium", 0) == 0           # gated: no plutonium before the tech
+    sim.research.level = balance.NUCLEAR_PLANT_TECH
+    sim._sync_research()
+    for _ in range(int(90 / (1 / 60))):
+        eco.update(1 / 60)
+    assert eco.inv.get("plutonium", 0) > 0            # now uranium refines into plutonium
+    assert eco.inv["uranium_ore"] < 100
+
+
+def test_build_nuclear_plant_gated_by_tech():
+    sim = Simulation(Config())
+    eco = sim.economy
+    for k, v in balance.POWER_PLANT_COST["nuclear"].items():
+        eco.inv[k] = v * 3
+    ok, msg = sim.build_power_plant("nuclear", 1)
+    assert not ok and "Nuclear Power" in msg          # gated before the tech
+    sim.research.level = balance.NUCLEAR_PLANT_TECH
+    sim._sync_research()
+    ok, _ = sim.build_power_plant("nuclear", 1)
+    assert ok and eco.power_plants["nuclear"] == 1
+    before = eco.power_plants["boiler"]
+    for k, v in balance.POWER_PLANT_COST["boiler"].items():
+        eco.inv[k] = eco.inv.get(k, 0) + v * 2
+    ok, _ = sim.build_power_plant("boiler", 2)         # boilers need no tech
+    assert ok and eco.power_plants["boiler"] == before + 2
 
 
 def test_power_status_in_stats():

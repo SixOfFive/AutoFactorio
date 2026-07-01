@@ -27,7 +27,10 @@ from .trains import Train, Leg
 # is regenerated). Also carries v4's milk-run corridors (trunk.train_id / train.trunk_id).
 # Older saves can't be reconstructed by this loader, so they are NOT loadable - startup
 # cleanly falls back to a fresh game.
-SAVE_VERSION = 5
+# v6: power PLANTS (boilers + nuclear) generate the energy factories consume; uranium ore
+# refines to plutonium (reactor fuel); load-shedding via factory_online. Adds
+# economy.power_plants + factory_online to the save.
+SAVE_VERSION = 6
 
 
 # ---- fog grid (de)compression --------------------------------------------
@@ -92,6 +95,8 @@ def save_game(sim, path: str) -> None:
             "furnaces": sim.economy.furnaces,
             "furnace_tier": sim.economy.furnace_tier,
             "assemblers": sim.economy.assemblers,
+            "power_plants": dict(sim.economy.power_plants),
+            "factory_online": sim.economy.factory_online,
             "total_smelted": sim.economy.total_smelted,
             "total_crafted": sim.economy.total_crafted,
             "caps": dict(sim.economy.caps),
@@ -262,6 +267,10 @@ def load_into(sim, path: str) -> None:
     sim.economy.furnaces = e["furnaces"]
     sim.economy.furnace_tier = e["furnace_tier"]
     sim.economy.assemblers = e["assemblers"]
+    pp = e.get("power_plants") or {}
+    sim.economy.power_plants = {"boiler": int(pp.get("boiler", balance.HOME_START.get("boilers", 0))),
+                                "nuclear": int(pp.get("nuclear", 0))}
+    sim.economy.factory_online = float(e.get("factory_online", 1.0))
     sim.economy.total_smelted = e["total_smelted"]
     sim.economy.total_crafted = e["total_crafted"]
     if "research" in data:

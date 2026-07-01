@@ -15,6 +15,8 @@ _SPEC = {
     "abandon_field":   {"field_id": (int, True, None)},
     "build_assembler": {"count": (int, False, 1)},
     "build_furnace":   {"count": (int, False, 1)},
+    "build_power_plant": {"kind": (str, False, "boiler"), "count": (int, False, 1)},
+    "set_factories":   {"fraction": (float, True, None)},
     "expand_drills":   {"field_id": (int, True, None), "count": (int, False, 2)},
     "build_storage":   {"item": (str, True, None), "count": (int, False, 1)},
     "research":        {},
@@ -29,6 +31,8 @@ def _coerce(value, typ):
     try:
         if typ is int:
             return int(value)
+        if typ is float:
+            return float(value)
         if typ is str:
             return str(value)
     except (TypeError, ValueError):
