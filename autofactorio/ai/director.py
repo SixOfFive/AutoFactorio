@@ -35,10 +35,12 @@ You receive a JSON game-state report. Reply with ONLY a JSON object:
 {"reasoning": "<one short sentence>", "actions": [ <action>, ... ]}
 
 Valid actions (use the exact "action" names and integer ids from the report):
-- {"action":"build_field","patch_id":N}      claim a discovered patch: places drills,
-                                              lays one-way track home, dispatches a train.
-                                              Only patches with "affordable":true succeed.
-- {"action":"add_train","field_id":N}         add a train to a field whose buffer is full.
+- {"action":"build_field","patch_id":N}      claim a discovered patch: builds its OWN
+                                              private rail loop + one train. Only patches
+                                              with "affordable":true succeed; a patch too
+                                              close in DIRECTION to an existing loop is not
+                                              affordable (its loop would overlap) - expand
+                                              in a spread of directions.
 - {"action":"abandon_field","field_id":N}      retire a field whose patch is depleted
                                               (report shows "depleted":true); salvages its train.
 - {"action":"build_furnace","count":N}        deploy furnaces from stock to smelt faster.
@@ -77,9 +79,10 @@ Each turn, in priority order:
    build_storage for EACH item in "storage_full". Build a robot on WILDLIFE_PRESSURE/
    DAMAGED_TRAINS when robots.can_build.
 2. EXPAND HARD: claim EVERY patch with "affordable":true this turn (multiple
-   build_field actions), favoring ore types you have fewest of. Add a train
-   (add_train) to any field with "buffer_full":true. Add drills (expand_drills) to
-   your productive fields.
+   build_field actions), favoring ore types you have fewest of AND spreading across
+   DIRECTIONS (each field needs its own clear direction; same-direction patches read
+   as not affordable). Add drills (expand_drills) to your productive fields to mine a
+   field out faster.
 3. SCALE PRODUCTION to match intake: if ORE_BACKING_UP, smelting is the bottleneck -
    build_furnace (a handful, count ~4-6). If PLATES_BACKING_UP, crafting is -
    build_assembler (count ~3-4). Keep adding as long as those flags persist so

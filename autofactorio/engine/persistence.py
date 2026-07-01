@@ -21,11 +21,12 @@ from .rail import RailEdge, Block, Signal, Station, Trunk
 from .mining import MiningField
 from .trains import Train, Leg
 
-# v2: shared-track trunk network (per-sector shared corridors + field branches),
-# replacing the old one-dedicated-loop-per-field geometry. v1 saves used the old
-# converge-at-home loops that jam under the new traffic model, so they are not
-# loadable - startup cleanly falls back to a fresh game instead.
-SAVE_VERSION = 2
+# v3: private disjoint-loop network - one field/one train per trunk, trunks held far
+# enough apart in bearing (on a big home ring) that no two loops ever converge, so the
+# base can't gridlock. v1/v2 saves used converge-at-home geometry that jams under this
+# traffic model, so they are NOT loadable - startup cleanly falls back to a fresh game
+# (which is exactly what we want: resuming an old save would bring the jam back).
+SAVE_VERSION = 3
 
 
 # ---- fog grid (de)compression --------------------------------------------

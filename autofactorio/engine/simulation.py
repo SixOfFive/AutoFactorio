@@ -453,6 +453,9 @@ class Simulation:
     def can_build_field(self, patch) -> bool:
         if patch is None or patch.claimed or patch.depleted or not patch.discovered:
             return False
+        bearing = math.atan2(patch.cy, patch.cx)
+        if not self.net.can_place_trunk(bearing):          # no free (non-overlapping) corridor
+            return False
         return self.economy.have(self.field_cost(patch, self.choose_tier()))
 
     def build_field(self, patch_id: int, tier: str | None = None) -> tuple[bool, str]:
@@ -473,10 +476,11 @@ class Simulation:
             missing = {k: v for k, v in costs.items() if self.economy.inv.get(k, 0) < v}
             return False, f"insufficient materials for field: need {missing}"
 
-        # attach the field to its sector's SHARED trunk (build a new trunk only if no
-        # existing one serves this bearing) - clustered fields share track instead of
-        # each piling a private loop onto the home ring.
+        # give the field its OWN private loop (a trunk), placed at a bearing kept clear
+        # of every other trunk so no two loops ever converge - the base can't gridlock.
         bearing = math.atan2(patch.cy, patch.cx)
+        if not self.net.can_place_trunk(bearing):
+            return False, "no free rail corridor (base ring full; wait for a field to deplete)"
         legA, legB, branch_e, new_e, load_st, unload_st, trunk, created = \
             self.net.attach_field(bearing, (patch.cx, patch.cy))
         fid = self._fid
@@ -550,29 +554,11 @@ class Simulation:
                 other.patch.reserve = max(0, int(other.patch.reserve * (1.0 - frac)))
 
     def add_train(self, field_id: int) -> tuple[bool, str]:
-        """Add throughput to a field by running a SECOND train on its existing branch
-        (shared track). No new rail is laid: the two trains share every block and
-        simply follow each other (one-train-per-block), queueing at the stations - so
-        it stays collision/deadlock-free and visibly busy. Costs only rolling stock."""
-        field = self.fields.get(field_id)
-        if field is None:
-            return False, f"no field #{field_id}"
-        if not field.legs_template:
-            return False, f"field #{field_id} has no route yet"
-        costs = {"locomotive": 1, "cargo_wagon": balance.DEFAULT_WAGONS}
-        if not self.economy.have(costs):
-            return False, "insufficient rolling stock for another train"
-        legs = [Leg(list(e), sid, tuple(w)) for (e, sid, w) in field.legs_template]
-        # no construction needed (track already exists): dispatch immediately
-        tid = self._tid
-        self._tid += 1
-        train = Train(tid, legs, balance.DEFAULT_WAGONS, self.net, self.research)
-        self.trains[tid] = train
-        self._bind_throat(train, field)
-        self._spawn_position(train, field)
-        self.economy.spend(costs)
-        self.log(f"Second train #{tid} dispatched on field #{field_id}'s shared track.")
-        return True, f"train #{tid} added to field #{field_id}"
+        """DISABLED: each loop runs exactly ONE train. A private loop with a single
+        train is the only arrangement that provably never deadlocks (two trains on one
+        home balloon gridlock in some geometries), so we never put a second train on a
+        loop. To add throughput, claim ANOTHER field (its own disjoint loop) instead."""
+        return False, "one train per loop; build another field for more throughput"
 
     def abandon_field(self, field_id: int) -> tuple[bool, str]:
         """Begin decommissioning a depleted field. This does NOT instantly remove
@@ -620,14 +606,21 @@ class Simulation:
             self.economy.inv[item] += (qty - stored)
 
     def _update_decommission(self) -> None:
-        """Advance fields through recalling -> dismantling once their trains are
-        all home/stored (robots then handle the actual teardown)."""
-        for field in self.fields.values():
+        """Once a recalled field's train is home/stored, tear its loop down IMMEDIATELY:
+        remove the track and FREE ITS BEARING SLOT so a new field can be built in that
+        direction right away, and credit the reclaimed materials back to the base. (We
+        used to leave the dead loop standing until a robot slowly drove out to dismantle
+        it - but a private loop OWNS one of the base's limited radial slots, so lingering
+        dead loops choked off all the slots and the train fleet drained to zero. Prompt
+        recycling keeps the frontier - and the fleet - alive.)"""
+        for field in list(self.fields.values()):
             if field.state == "recalling":
                 if not any(self._train_field(t) == field.id for t in self.trains.values()):
-                    field.state = "dismantling"
-                    self.log(f"Field #{field.id}: all trains stored; dispatching a robot "
-                             f"to dismantle the track.")
+                    mats = self.teardown_field_track(field)     # removes track + frees slot
+                    for item, qty in mats.items():
+                        self._reclaim_stock(item, qty)
+                    self.log(f"Field #{field.id} dismantled; loop cleared and "
+                             f"materials reclaimed to base.")
 
     def teardown_field_track(self, field) -> dict:
         """Called by a robot that has reached a decommissioned field: remove its

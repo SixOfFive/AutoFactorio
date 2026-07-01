@@ -217,19 +217,56 @@ class RailNetwork:
     # ---- shared-track trunk network ---------------------------------------
     def find_or_make_trunk(self, bearing: float, reach: float) -> tuple[Trunk, bool]:
         """Return the trunk serving this bearing's sector (building a new one, reaching
-        out to `reach` tiles, if none is within TRUNK_MERGE_DEG). 2nd value: created?"""
+        out to `reach` tiles, if none is within TRUNK_MERGE_DEG). 2nd value: created?
+
+        A field ALWAYS joins the nearest trunk within the merge angle - there is NO
+        per-trunk field cap. That cap used to force a brand-new trunk in nearly the
+        SAME bearing once a sector filled up, and those parallel trunks' home balloons
+        physically overlapped near the origin (their throat interlocks are independent),
+        which gridlocked every train in that direction. By only ever creating a new
+        trunk when NO existing one is within TRUNK_MERGE_DEG, every pair of trunks stays
+        at least that angle apart, so their home throats never overlap - clustered
+        same-direction fields share ONE trunk's spine (queueing single-file) instead."""
         best = None
         best_d = math.radians(balance.TRUNK_MERGE_DEG)
         for tk in self.trunks.values():
             if len(tk.field_ids) >= balance.TRUNK_MAX_FIELDS:
-                continue                              # full: don't overload its one throat
+                continue
             d = abs((bearing - tk.bearing + math.pi) % (2 * math.pi) - math.pi)
             if d <= best_d:
                 best_d = d
                 best = tk
         if best is not None:
             return best, False
+        if not self._bearing_clear(bearing):
+            return None, False                       # too close to another loop - refuse
         return self.build_trunk(bearing, reach), True
+
+    def _bearing_clear(self, bearing: float) -> bool:
+        """True if a new RADIAL loop along `bearing` would stay at least TRUNK_MERGE_DEG
+        from every existing trunk. Each trunk points straight at its own field, so two
+        loops whose bearings differ by >= the merge angle are radial corridors that
+        never come near each other at ANY radius (their separation only grows with
+        distance from home) - which is what guarantees the whole network is disjoint,
+        not just the home throats."""
+        sep = math.radians(balance.TRUNK_MERGE_DEG)
+        for tk in self.trunks.values():
+            d = abs((bearing - tk.bearing + math.pi) % (2 * math.pi) - math.pi)
+            if d < sep - 1e-6:
+                return False
+        return True
+
+    def can_place_trunk(self, bearing: float) -> bool:
+        """True if a field on this bearing can be served: either an existing non-full
+        trunk is within the merge angle (would share it), or the bearing is clear for a
+        fresh radial loop. With TRUNK_MAX_FIELDS=1 this is just 'the bearing is clear'."""
+        sep = math.radians(balance.TRUNK_MERGE_DEG)
+        for tk in self.trunks.values():
+            if len(tk.field_ids) < balance.TRUNK_MAX_FIELDS:
+                d = abs((bearing - tk.bearing + math.pi) % (2 * math.pi) - math.pi)
+                if d <= sep:
+                    return True
+        return self._bearing_clear(bearing)
 
     def _spine_segment(self, a_pt, b_pt) -> tuple[int, int]:
         """One straight signalled spine edge a->b (its own block). Returns (edge, b_node)."""
@@ -319,6 +356,8 @@ class RailNetwork:
         rP = math.hypot(field_pt[0], field_pt[1])
         before = set(self.edges.keys())                    # snapshot before any new track
         tk, created = self.find_or_make_trunk(bearing, rP + balance.TRUNK_STEM_LEN)
+        if tk is None:
+            raise ValueError("no free rail corridor")      # ring full; caller refuses the field
         if rP + 2.0 > tk.max_r:                            # ensure the spine reaches the field
             self._extend_spine(tk, rP + balance.TRUNK_STEM_LEN)
         spine_new = [e for e in self.edges.keys() if e not in before]  # new spine (if created/extended)

@@ -84,7 +84,11 @@ PATCH_RESERVE = {"iron_ore": 25000, "copper_ore": 15000, "coal": 20000, "stone":
 
 # When a farther field is claimed, nearer fields lose up to this fraction of their
 # remaining reserve (scaled by how much closer they are) - pushes the frontier out.
-EXPANSION_DEPLETE_K = 0.20
+# Kept gentle: each private loop holds one of the base's limited radial slots, so
+# depleting fields too fast would keep churning the whole fleet in and out and leave
+# the map looking sparse. A slow bleed keeps ~9-12 trains steadily running while the
+# frontier still creeps outward.
+EXPANSION_DEPLETE_K = 0.10
 
 # Fraction of a reclaimed field's track materials refunded when it is abandoned.
 RECLAIM_REFUND = 0.5
@@ -151,6 +155,18 @@ def fuel_efficiency(level: int) -> float:
 TRAIN_COLLISION_DIST = 3.2         # tiles
 TRAIN_LOOKAHEAD = 4.0              # tiles ahead the head checks for obstacles
 
+# Merge interlock: block reservation alone doesn't protect a MERGE (two one-way
+# tracks joining into one), because both approaching trains can creep within
+# collision distance of the join before either has claimed the shared downstream
+# block - then the hard guard freezes both symmetrically (a deadlock). To fix this
+# a train RESERVES the block just ahead of it while still this many tiles short of
+# it (so a converging train sees it taken in time), and a train that can't get the
+# next block stops this far BEFORE the block boundary (not right at it), leaving the
+# block's owner physical clearance to pass through the join un-grazed. Must exceed
+# TRAIN_COLLISION_DIST with margin so the waiting train never trips the winner's
+# hard guard.
+MERGE_CLEAR = 6.0                  # tiles: reserve-ahead distance AND stop-back gap
+
 # Home junction interlock: every loop converges near the origin, so the whole
 # central cluster is one interlocked junction. Only ONE train may move inside it
 # at a time (a single mutex); everyone else waits OUTSIDE the cluster for their
@@ -175,31 +191,43 @@ HOME_RING = 14                     # (legacy) each old dedicated loop's home tur
 HOME_RING_BAY = 7                  # (legacy) extra ring per duplicate loop
 
 # ---------------------------------------------------------------------------
-# Shared-track TRUNK network (replaces one-dedicated-loop-per-field)
+# Private-loop TRUNK network (one disjoint loop per field, deadlock-free)
 # ---------------------------------------------------------------------------
-# Fields no longer each get a private loop that converges on the home ring (which
-# gridlocked when several fields lay in the same direction). Instead fields are
-# grouped into angular SECTORS; each sector has ONE shared double-track trunk - a
-# home balloon-loop + a short outbound/inbound stem - that every train on that
-# sector shares. Trains FOLLOW each other along the common stem (one-train-per-
-# block), then peel off onto a per-field BRANCH to their own patch and merge back.
-# Because all of a sector's loops share the SAME home turnaround + unload, the
-# number of distinct home crossings is bounded by the sector count (<= 360/merge),
-# not by the field count -> clustered fields can't pile up at the base anymore, and
-# trains visibly intermingle / travel to different areas along the same track.
-TRUNK_MERGE_DEG = 30               # a new field joins an existing trunk if within this
-                                   # many degrees of its bearing; else a new trunk is made.
-                                   # Trunks therefore sit >= this far apart so their home
-                                   # throats clear, while same-direction fields share a trunk.
-TRUNK_HOME_RING = 20               # radius of a trunk's home balloon-loop (unload sits here).
-                                   # Kept WELL INSIDE the nearest patches (PATCH_MIN_RING) so
-                                   # every loop runs outward and is longer than a train (a
-                                   # train parked at its field must clear the home throat).
+# Hard-won lesson from repeated home-area gridlock: ANY design where multiple loops
+# converge near the origin deadlocks, because trains from different loops physically
+# pile into the cramped centre and hard-stop each other in a cycle no interlock can
+# unwind - and a single shared home balloon can only flow 1-2 trains before its
+# turnaround knots up. So the network is now the simplest thing that CANNOT deadlock:
+#   * exactly ONE field, ONE train per trunk (TRUNK_MAX_FIELDS=1) - a lone train on
+#     its own loop can never contend with itself; and
+#   * every trunk's home balloon sits out on a big HOME RING and the trunks are held
+#     far enough apart in bearing that no two loops ever come within a train's width
+#     of each other - so trains on different loops never interact either.
+# Two trains never share a block or a crossing, so the block/throat interlock has
+# nothing to resolve and the base simply never jams. Fields all lie BEYOND the home
+# ring (PATCH_MIN_RING > TRUNK_HOME_RING), so every loop runs cleanly outward. The
+# frontier keeps moving as near patches deplete, so expansion still feels unbounded
+# even though ~9-12 loops are live at once.
+TRUNK_MERGE_DEG = 22               # MINIMUM bearing separation between trunks. A new field
+                                   # gets its own trunk placed at its own bearing only if that
+                                   # is >= this angle from EVERY existing trunk (see
+                                   # RailNetwork._bearing_clear); once the circle's exclusion
+                                   # bands fill (~9-12 loops, depending on where the patches lie)
+                                   # no more can be placed and the field is refused until one
+                                   # frees up. At the home ring 22deg still keeps adjacent
+                                   # balloons a safe margin apart so loops are
+                                   # fully disjoint.
+TRUNK_MAX_FIELDS = 1               # ONE field (=> one train) per trunk. See above: a lone
+                                   # train on a private loop is the only arrangement that is
+                                   # provably deadlock-free. Do NOT raise this - 2+ trains on a
+                                   # single home balloon gridlock in some geometries.
+TRUNK_HOME_RING = 45               # radius of a trunk's home balloon-loop (the unload depot).
+                                   # BIG on purpose: out here the balloons sit spread around a
+                                   # wide ring and their inward bulge still stops well short of
+                                   # the origin, so loops never converge on the centre (the old
+                                   # r=20 ring bulged into the origin and gridlocked). Must stay
+                                   # < PATCH_MIN_RING so every field is outside it (outward loop).
 TRUNK_STEM_LEN = 14                # spine segment step length
-TRUNK_MAX_FIELDS = 3               # cap fields sharing one trunk's single home throat;
-                                   # an extra in-direction field starts a new trunk so no
-                                   # one throat is overloaded (only bites pathological
-                                   # many-fields-one-direction clusters; spread builds never)
 RAIL_GRID = 2                      # rail nodes snap to even tile coords on straights
 LANE_OFFSET = 10                   # gap between the two one-way lanes (tiles); also the
                                    # diameter of the U-turn loops, so trains never turn sharp
@@ -315,7 +343,9 @@ SCOUT_SPEED = 6.0                  # tiles/sec (explorer robot)
 TRAIN_REVEAL_RADIUS = 7            # tiles each moving train clears around its cars
                                    # (rails become sightlines: trains chart their route)
 PATCH_COUNT = 60                   # ore patches scattered across the map
-PATCH_MIN_RING = 30                # barren ring around HQ; nearest patches start here
+PATCH_MIN_RING = 54                # barren ring around HQ; nearest patches start here. Must sit
+                                   # OUTSIDE TRUNK_HOME_RING (the depot ring) so every field lies
+                                   # beyond its trunk's home balloon and the loop runs outward.
 PATCH_RADIUS = (2, 4)             # patch footprint radius range (tiles)
 ORE_WEIGHTS = {"iron_ore": 0.42, "copper_ore": 0.24, "coal": 0.20, "stone": 0.14}
 

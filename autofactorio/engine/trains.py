@@ -149,6 +149,14 @@ class Train:
         b = self._block_at(self.head_s)
         if b is not None:
             ids.add(b)
+        # RESERVE-AHEAD: also claim the block a short distance in front of the head.
+        # This is what interlocks merges - a train grabs the block it is about to
+        # enter while still MERGE_CLEAR tiles short of it, so a train converging from
+        # another track sees it taken and stops back instead of both nosing into the
+        # join and freezing each other.
+        b = self._block_at(min(self.leg_len, self.head_s + balance.MERGE_CLEAR))
+        if b is not None:
+            ids.add(b)
         # the tail can still trail onto the PREVIOUS leg (cars span the boundary just
         # after departing a stop); reserve those blocks too, so a following train can't
         # drive into our wagons across the leg boundary (a real collision otherwise).
@@ -184,14 +192,18 @@ class Train:
         region_waiting = False        # legitimately queued for the home-crossing mutex
         traffic_blocked = False       # stopped by another train's car (possible deadlock)
 
-        # block reservation: don't enter a block another train holds
-        front_block_after = self._block_at(target)
+        # block reservation: don't enter a block another train holds. Look ahead by
+        # MERGE_CLEAR (not just to `target`) so we notice the next block is taken while
+        # still short of it, and STOP that far BEFORE its boundary - leaving the block's
+        # owner clearance to pass a merge/join without our nose grazing its hard guard.
         cur_block = self._block_at(self.head_s)
+        ahead = min(self.leg_len, self.head_s + max(ds, balance.MERGE_CLEAR))
+        front_block_after = self._block_at(ahead)
         if front_block_after is not None and front_block_after != cur_block:
             blk = net.blocks.get(front_block_after)
             if blk is not None and blk.occupant not in (None, self.id):
                 bstart = self._block_start(front_block_after)
-                target = max(self.head_s, bstart - 0.05)
+                target = max(self.head_s, min(target, bstart - balance.MERGE_CLEAR))
                 self.speed = 0.0
 
         # home-cluster interlock: only the mutex holder may move through the central

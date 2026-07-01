@@ -167,7 +167,7 @@ def test_network_self_expands():
 
 
 # ---- depleted-field lifecycle --------------------------------------------
-def test_decommission_stores_train_then_robot_reclaims_track():
+def test_decommission_stores_train_then_reclaims_track():
     sim = Simulation(Config())
     iron = next(p for p in sim.world.discovered_patches() if p.ore == "iron_ore")
     locos_before = sim.economy.inv.get("locomotive", 0)
@@ -180,17 +180,19 @@ def test_decommission_stores_train_then_robot_reclaims_track():
     ok, _ = sim.abandon_field(0)
     assert ok and sim.fields[0].state == "recalling"
     assert len(sim.trains) == 1                    # NOT removed instantly
-    assert all(e in sim.net.edges for e in edges)  # track NOT torn up yet
-    # drive it: train returns home -> storage -> robot tears up track -> hauls
-    # the salvage all the way home and deposits it
+    assert all(e in sim.net.edges for e in edges)  # track NOT torn up yet (train still on it)
+    # drive it: the recalled train returns home and goes into storage; the instant it
+    # is stored, its private loop is torn down (track removed, bearing slot freed) and
+    # the salvage materials are reclaimed to base - no slow robot trip (a lingering dead
+    # loop would hog one of the base's limited radial slots).
     for _ in range(int(600 / (1 / 60))):
         sim.tick(1 / 60)
-        if 0 not in sim.fields and not any(r.dismantle_phase for r in sim.robots.values()):
+        if 0 not in sim.fields:
             break
     assert 0 not in sim.fields                      # fully decommissioned
     assert all(e not in sim.net.edges for e in edges)             # track removed
     assert sim.economy.inv.get("locomotive", 0) >= locos_before   # train stored
-    assert any("returned salvage to base" in e[1] for e in sim.events)  # rail/drills hauled back
+    assert any("materials reclaimed to base" in e[1] for e in sim.events)  # rail/drills recovered
 
 
 def test_abandon_is_idempotent_and_non_destructive_at_start():
@@ -616,6 +618,7 @@ def test_train_waits_for_obstacle_ahead():
     t.head_s = t.leg_len * 0.4
     t.state = "moving"
     t.fuel_seconds = 100.0
+    t.holds_junction = True                 # isolate obstacle logic from the throat interlock
     hx, hy, _, _ = t.car_poses()[0]
     before = t.head_s
     t.update_movement(1 / 60, sim.net, obstacles=[(hx, hy)])   # obstacle right on us
@@ -652,13 +655,30 @@ def test_explorer_spiral_restarts_from_home():
 
 
 # ---- block-mutex collision safety ----------------------------------------
-def test_two_trains_one_lane_never_share_a_block():
+def test_no_two_trains_ever_share_a_block():
+    """Collision-safety invariant across the whole network: a block is a mutex, so at
+    every instant no two trains may hold the same block. Build several fields (each its
+    own disjoint loop, one train) and run them concurrently, checking every tick."""
+    import math
     sim = Simulation(Config())
-    iron = next(p for p in sim.world.discovered_patches() if p.ore == "iron_ore")
-    _build_active(sim, iron.id)
-    sim.add_train(0)               # second loop to the same field
-    _settle(sim)                   # let a robot lay the second loop
-    assert len(sim.trains) == 2
+    sim.world.explored[:] = 1
+    for p in sim.world.patches:
+        p.discovered = True
+    for k in ("rail", "rail_signal", "chain_signal", "train_stop", "locomotive",
+              "cargo_wagon", "electric_drill", "iron_plate", "steel_plate"):
+        sim.economy.inv[k] = 1_000_000
+    used = []
+    for p in sorted(sim.world.claimable_patches(), key=lambda q: math.hypot(q.cx, q.cy)):
+        a = math.atan2(p.cy, p.cx)
+        if all(abs((a - b + math.pi) % (2 * math.pi) - math.pi) >= math.radians(balance.TRUNK_MERGE_DEG + 4)
+               for b in used):
+            if sim.build_field(p.id)[0]:
+                used.append(a)
+        if len(used) >= 4:
+            break
+    assert len(sim.trains) >= 2 or len(sim.jobs) >= 2
+    for item in sim.economy.caps:
+        sim.economy.caps[item] = 10_000_000
     dt = 1 / 60
     for _ in range(int(240 / dt)):
         sim.tick(dt)
@@ -763,43 +783,43 @@ def test_many_loops_keep_flowing_without_permanent_jam():
     assert overlaps == 0, f"trains overlapped {overlaps} times"
 
 
-def test_collinear_fields_share_a_trunk_and_dont_jam():
-    """Fields in the SAME direction must SHARE a trunk's main line (a train for the far
-    field follows the near field's train down the common spine) instead of each piling a
-    private loop onto the home ring - which used to gridlock when several fields lay one
-    way. Here two pairs of fields, in two well-separated directions, each pair sharing a
-    trunk: the network keeps flowing and never overlaps. (Storage + reserves are given
-    headroom so this isolates TRAFFIC from the storage-backpressure / mining mechanics.)"""
+def test_separated_fields_get_disjoint_loops_and_dont_jam():
+    """Each field gets its OWN private loop (trunk), placed only where its bearing is
+    clear of every other loop by >= TRUNK_MERGE_DEG. One train per loop + separated
+    loops => trains on different loops never come near each other, so the base cannot
+    gridlock. Build several fields spread around the base and confirm: one trunk per
+    field, no shared throats, and no overlaps/jams while they all run. (Storage +
+    reserves get headroom so this isolates TRAFFIC from storage/mining mechanics.)"""
     import math
     sim = Simulation(Config())
     sim.world.explored[:] = 1
     for p in sim.world.patches:
         p.discovered = True
+    # pick patches in well-separated directions (>= merge angle apart) so each is claimable
     chosen = []
-    for lo, hi in ((0, 28), (60, 110)):               # two directions, >TRUNK_MERGE_DEG apart
-        picked = 0
-        for p in sorted(sim.world.claimable_patches(), key=lambda q: math.hypot(q.cx, q.cy)):
-            if p in chosen:
-                continue
-            a = math.degrees(math.atan2(p.cy, p.cx))
-            if lo <= a <= hi:
-                chosen.append(p)
-                picked += 1
-            if picked >= 2:
-                break
-    assert len(chosen) >= 3, "seed lacks patches in the two test directions"
+    used_bearings = []
+    for p in sorted(sim.world.claimable_patches(), key=lambda q: math.hypot(q.cx, q.cy)):
+        a = math.atan2(p.cy, p.cx)
+        if all(abs((a - b + math.pi) % (2 * math.pi) - math.pi) >= math.radians(balance.TRUNK_MERGE_DEG + 4)
+               for b in used_bearings):
+            chosen.append(p)
+            used_bearings.append(a)
+        if len(chosen) >= 5:
+            break
+    assert len(chosen) >= 4, "seed lacks enough well-separated patches"
+    for k in ("rail", "rail_signal", "chain_signal", "train_stop", "locomotive",
+              "cargo_wagon", "electric_drill", "iron_plate", "steel_plate"):
+        sim.economy.inv[k] = 1_000_000
     for p in chosen:
-        for k in ("rail", "rail_signal", "chain_signal", "train_stop", "locomotive",
-                  "cargo_wagon", "electric_drill", "iron_plate", "steel_plate"):
-            sim.economy.inv[k] = 1_000_000
         ok, _ = sim.build_field(p.id)
-        assert ok
+        assert ok, "a well-separated field should always be buildable"
     for item in sim.economy.caps:                     # plenty of storage: isolate traffic
         sim.economy.caps[item] = 10_000_000
     _settle(sim, max_s=180)
-    # real sharing: fewer trunks than fields, and at least one trunk serves >= 2 fields
-    assert len(sim.net.trunks) < len(sim.fields), "collinear fields did not share track"
-    assert any(len(tk.field_ids) >= 2 for tk in sim.net.trunks.values())
+    # exactly one private loop per field, and every train has its own throat
+    assert len(sim.net.trunks) == len(sim.fields), "each field must get its own loop"
+    assert all(len(tk.field_ids) == 1 for tk in sim.net.trunks.values())
+    assert len({t.throat_trunk for t in sim.trains.values()}) == len(sim.trains)
     for f in sim.fields.values():                     # deep reserves: isolate traffic, not mining
         f.patch.reserve = f.patch.max_reserve = 10_000_000
     dt = 1 / 60
@@ -817,14 +837,41 @@ def test_collinear_fields_share_a_trunk_and_dont_jam():
                     if any((ax - bx) ** 2 + (ay - by) ** 2 < thr
                            for (ax, ay, _a, _k) in poses[i] for (bx, by, _b, _l) in poses[j]):
                         overlaps += 1
-    assert sim.delivered_total > mid + 500, "shared-track network stopped delivering (jam)"
-    assert overlaps == 0, f"trains on shared track overlapped {overlaps} times"
+    assert sim.delivered_total > mid + 500, "disjoint-loop network stopped delivering (jam)"
+    assert overlaps == 0, f"trains on disjoint loops overlapped {overlaps} times"
     assert sim.stats()["stalled_trains"] == 0
 
 
-def test_add_train_uses_shared_track_no_new_rail():
-    """A second train for a field runs on its EXISTING branch (shared track), so no
-    new rail is laid - it just follows the first train around the loop."""
+def test_same_direction_second_field_is_refused():
+    """A field whose bearing is within the merge angle of an existing loop is REFUSED
+    (its loop would overlap), so same-direction fields never pile up and gridlock -
+    the caller must expand in a different direction."""
+    import math
+    sim = Simulation(Config())
+    sim.world.explored[:] = 1
+    for p in sim.world.patches:
+        p.discovered = True
+    for k in ("rail", "rail_signal", "chain_signal", "train_stop", "locomotive",
+              "cargo_wagon", "electric_drill", "iron_plate", "steel_plate"):
+        sim.economy.inv[k] = 1_000_000
+    patches = sorted(sim.world.claimable_patches(), key=lambda q: math.hypot(q.cx, q.cy))
+    first = patches[0]
+    ok, _ = sim.build_field(first.id)
+    assert ok
+    b0 = math.atan2(first.cy, first.cx)
+    # find another discovered patch within the merge angle of the first - it must be refused
+    near = next((p for p in patches if p is not first
+                 and abs((math.atan2(p.cy, p.cx) - b0 + math.pi) % (2 * math.pi) - math.pi)
+                 < math.radians(balance.TRUNK_MERGE_DEG - 2)), None)
+    if near is not None:
+        assert not sim.can_build_field(near)
+        ok2, msg = sim.build_field(near.id)
+        assert not ok2 and "corridor" in msg
+
+
+def test_add_train_is_refused_one_train_per_loop():
+    """add_train is disabled: a loop runs exactly one train (two would gridlock its
+    home balloon). The call is refused and no train/rail is added."""
     sim = Simulation(Config())
     iron = next(p for p in sim.world.discovered_patches() if p.ore == "iron_ore")
     _build_active(sim, iron.id)
@@ -833,13 +880,10 @@ def test_add_train_uses_shared_track_no_new_rail():
     trains_before = len(sim.trains)
     sim.economy.inv["locomotive"] = 5
     sim.economy.inv["cargo_wagon"] = 20
-    ok, _ = sim.add_train(fid)
-    assert ok
-    assert len(sim.trains) == trains_before + 1
-    assert len(sim.net.edges) == edges_before        # reused existing track, no new rail
-    # the two trains share the field's trunk throat
-    throats = {t.throat_trunk for t in sim.trains.values()}
-    assert len(throats) == 1 and -1 not in throats
+    ok, msg = sim.add_train(fid)
+    assert not ok and "one train per loop" in msg
+    assert len(sim.trains) == trains_before          # no train added
+    assert len(sim.net.edges) == edges_before        # no rail added
 
 
 def test_signal_aspect_goes_red_when_block_occupied():

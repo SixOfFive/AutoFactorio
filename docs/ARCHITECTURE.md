@@ -73,24 +73,32 @@ and releases them behind it. Head-on collisions are structurally impossible
 (directed edges) and same-lane rear-end collisions are prevented by the block
 mutex (blocks are sized >= a train length).
 
-Fields are NOT each given a private loop. They are grouped into angular **sectors**
-(`engine/rail.py` `Trunk`): each sector has ONE shared double-track **main line** -
-a home balloon-loop with a single unload stop, then a straight radial spine running
-outward. A field attaches to its sector's trunk via a short **siding** at its own
-radius (`attach_field`), so trains for different fields **follow each other along the
-common spine** (intermingling, multi-destination shared track) and only the short
-sidings are private. Same-direction fields therefore share a corridor instead of
-piling separate loops onto the home area (which used to gridlock).
+**Every field gets its OWN private loop, run by exactly ONE train** (`engine/rail.py`
+`Trunk`, one field per trunk): a home balloon-loop + unload depot out on a big **home
+ring**, a straight radial spine out to the patch, and a field turnaround. This is the
+only arrangement that is *provably* deadlock-free, and it was reached the hard way -
+every design that let loops converge near the origin, or put 2+ trains through a
+single home balloon, gridlocked (trains from different loops, or two trains on one
+balloon, hard-stop nose-to-tail in a cycle no interlock can unwind).
 
-The one spot too small for two trains is each trunk's home **throat** (the balloon
-turnaround), so it's an interlock: at most one train traverses a throat at a time
-(`Simulation._arbitrate_junction`), granted to the train nearest to entering (front
-of queue, avoiding priority inversion) and held until its whole train clears. The
-unload stop sits just OUTSIDE the throat, so returning trains always reach it without
-contending - only departing trains queue for the turnaround. A trunk caps how many
-fields share its throat (`TRUNK_MAX_FIELDS`); an extra in-direction field starts a new
-trunk. A global anti-deadlock watchdog lets the single most-stuck train push through
-if the whole network ever freezes, so it can never permanently lock up.
+Two guarantees keep it jam-free:
+1. **One train per loop** (`TRUNK_MAX_FIELDS = 1`, `add_train` disabled) - a lone train
+   can never contend with itself.
+2. **Loops never converge.** A new field's loop is *radial* (the trunk points straight
+   at its patch) and is only placed if its bearing is `>= TRUNK_MERGE_DEG` from every
+   existing loop (`RailNetwork._bearing_clear` / `can_place_trunk`). Radial corridors
+   that far apart in bearing stay separated at *every* radius, so no two trains ever
+   come within a car's width of each other. A patch whose direction is already taken is
+   simply refused (`build_field` returns "no free rail corridor") - the director expands
+   in a different direction, and the frontier keeps moving as near patches deplete.
+
+Because two trains never share a block or a crossing, the block mutex + home-throat
+interlock (`Simulation._arbitrate_junction`) have nothing to resolve and the base can't
+jam. When a field depletes, its loop is torn down and its bearing slot freed the instant
+its train is stored (`_update_decommission`) so replacements can be built at once. Fields
+lie beyond the home ring (`PATCH_MIN_RING > TRUNK_HOME_RING`), so every loop runs cleanly
+outward. `MERGE_CLEAR` reserve-ahead block locking keeps a train that must wait for a
+block stopping with real clearance rather than nosing up to it.
 
 ## Testing
 Headless smoke tests (no window, run with the venv python):
