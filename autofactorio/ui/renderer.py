@@ -22,6 +22,13 @@ ARROW = (210, 214, 110)
 FOG = (7, 9, 14)
 SIG_GREEN = (90, 220, 110)
 SIG_RED = (228, 86, 70)
+# central rail terminal (the unified home "station")
+YARD = (58, 60, 68)               # paved station yard/concourse
+YARD_RIM = (86, 90, 102)
+YARD_PLAZA = (72, 75, 84)         # lighter inner plaza under the terminal building
+PLATFORM = (138, 141, 149)        # island platform between a berth's two tracks
+PLATFORM_EDGE = (198, 202, 210)
+CANOPY = (84, 90, 104)            # platform canopy ridge
 
 
 class Renderer:
@@ -34,6 +41,7 @@ class Renderer:
     def draw(self, screen: pygame.Surface, cam, sim, selected=None, dt: float = 0.0) -> None:
         screen.fill(GRASS)
         self._decor(screen, cam, sim)
+        self._terminal_ground(screen, cam, sim)   # paved yard + platforms UNDER the rails
         self._patches(screen, cam, sim)
         self._rails(screen, cam, sim)
         self._stations(screen, cam, sim)
@@ -211,8 +219,48 @@ class Renderer:
         pygame.draw.rect(screen, (60, 64, 72), (x, y, w, h))
         pygame.draw.rect(screen, color, (x, y, int(w * frac), h))
 
+    def _terminal_ground(self, screen, cam, sim):
+        """The unified home TERMINAL, drawn under the rails: a paved concourse at the
+        base plus an ISLAND PLATFORM at every corridor's berth (a track runs along each
+        long edge). This gathers the radiating one-train corridors into one station whose
+        double-track lines lead away - no change to the (jam-free) track topology."""
+        cx, cy = cam.world_to_screen(0, 0)
+        apron_r = int((balance.TRUNK_HOME_RING + 3) * cam.zoom)
+        if apron_r >= 4 and self._on(cam, cx, cy, apron_r + 24):
+            pygame.draw.circle(screen, YARD, (int(cx), int(cy)), apron_r)
+            pygame.draw.circle(screen, YARD_RIM, (int(cx), int(cy)), apron_r,
+                               max(1, int(cam.zoom * 0.12)))
+            plaza = int(20 * cam.zoom)
+            if plaza > 3:
+                pygame.draw.circle(screen, YARD_PLAZA, (int(cx), int(cy)), plaza)
+        if cam.zoom < 2.2:
+            return
+        off = balance.LANE_OFFSET
+        r_mid = balance.TRUNK_HOME_RING + 7
+        for tk in sim.net.trunks.values():
+            ux, uy = math.cos(tk.bearing), math.sin(tk.bearing)
+            px, py = -uy, ux
+            bx = ux * r_mid + px * off * 0.5          # between the berth's two lanes
+            by = uy * r_mid + py * off * 0.5
+            self._platform(screen, cam, bx, by, (ux, uy), (px, py), 16.0, off * 0.5)
+
+    def _platform(self, screen, cam, wx, wy, u, p, length, width):
+        hl, hw = length * 0.5, width * 0.5
+        corners = [(wx + u[0] * hl + p[0] * hw, wy + u[1] * hl + p[1] * hw),
+                   (wx + u[0] * hl - p[0] * hw, wy + u[1] * hl - p[1] * hw),
+                   (wx - u[0] * hl - p[0] * hw, wy - u[1] * hl - p[1] * hw),
+                   (wx - u[0] * hl + p[0] * hw, wy - u[1] * hl + p[1] * hw)]
+        scr = [cam.world_to_screen(x, y) for (x, y) in corners]
+        if not any(self._on(cam, sx, sy, 30) for sx, sy in scr):
+            return
+        pygame.draw.polygon(screen, PLATFORM, scr)
+        pygame.draw.polygon(screen, PLATFORM_EDGE, scr, max(1, int(cam.zoom * 0.09)))
+        a = cam.world_to_screen(wx - u[0] * hl * 0.8, wy - u[1] * hl * 0.8)
+        b = cam.world_to_screen(wx + u[0] * hl * 0.8, wy + u[1] * hl * 0.8)
+        pygame.draw.line(screen, CANOPY, a, b, max(2, int(width * 0.42 * cam.zoom)))
+
     def _home(self, screen, cam, sim):
-        self._blit(screen, cam, "hq", 0, 0, 4.5)
+        self._blit(screen, cam, "hq", 0, 0, 6.5)
         # concentric rings of furnaces + assemblers representing the home factory; the
         # base visibly fills out as the director scales up (exact counts in the panel)
         self._factory_rings(screen, cam, "smelter", sim.economy.furnaces,

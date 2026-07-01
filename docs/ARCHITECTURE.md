@@ -64,9 +64,11 @@ run.py ──► ui/app.py ──► engine/simulation.py ──► engine/{worl
 ### ui/ — presentation (pygame-ce)
 - **camera.py** — two strict-inverse transforms; cursor-anchored wheel zoom.
 - **assets.py** — loads procedural sprites; caches scaled + 5°-bucketed rotations.
-- **renderer.py** — viewport-culled draw of terrain, ore, one-way rails (with
-  direction arrows + occupancy-colored signals), stations, fields, home factory,
-  trains, scout, and the numpy fog overlay (built per-frame from the visible slice).
+- **renderer.py** — viewport-culled draw of terrain, ore, the home **terminal** (a paved
+  concourse + central plaza with an island platform at every corridor's berth, so the
+  radiating one-train corridors read as ONE station whose double-track lines lead away),
+  one-way rails (with direction arrows + occupancy-colored signals), stations, fields,
+  home factory, trains, scout, and the numpy fog overlay (built per-frame from the slice).
 - **hud.py / console.py** — top stats bar and bottom director/scout comms log.
 - **app.py** — window, input, and the update/draw loop.
 

@@ -70,9 +70,10 @@ class World:
         # early game has patches immediately (growth handles everything beyond it)
         self._place_starters()
         self._materialize_region(-self.radius, -self.radius, self.radius, self.radius)
-        # the base sits in a barren clearing: reveal a small home area, then each (distant)
-        # starter patch so the first tracks must be long
-        self.reveal(0, 0, balance.SCOUT_REVEAL_RADIUS)
+        # clear the whole home TERMINAL yard of fog (so the paved concourse + platforms are
+        # never pocked with unexplored holes), then reveal each (distant) starter patch. The
+        # nearest ore is still beyond the yard (PATCH_MIN_RING > this), so first tracks stay long.
+        self.reveal(0, 0, balance.TRUNK_HOME_RING + 8)
         for p in self.patches[:self._starter_count]:
             self.reveal(p.cx, p.cy, balance.SCOUT_REVEAL_RADIUS - 1)
 
