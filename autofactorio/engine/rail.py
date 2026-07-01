@@ -38,6 +38,12 @@ class Block:
     edge_ids: list[int] = field(default_factory=list)
     length: float = 0.0
     occupant: int | None = None             # train id holding the mutex
+    chain: bool = False                     # True = a junction/merge/crossing block entered
+                                            # via a CHAIN signal: a train may enter only if it
+                                            # can atomically reserve the whole contiguous chain
+                                            # run PLUS the first plain block beyond it (the safe
+                                            # exit), so it never stops inside a junction. This is
+                                            # what lets corridors share track without deadlock.
 
 
 @dataclass

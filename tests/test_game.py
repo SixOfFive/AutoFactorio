@@ -705,6 +705,83 @@ def test_explorer_spiral_expands_outward_forever():
 
 
 # ---- block-mutex collision safety ----------------------------------------
+def test_chain_signals_make_a_shared_merge_deadlock_free_and_fair():
+    """The chain-signal engine: THREE trains all funnel through ONE shared merge -> segment
+    (marked CHAIN) -> diverge, from distinct approach bearings. A train may enter the shared
+    run only if it can reserve the whole run + safe exit atomically, and right-of-way goes to
+    the longest-blocked train. Expect: no two trains ever hold a shared block (mutex holds),
+    no car overlaps, bounded waits (no deadlock), and FAIR service (no starvation)."""
+    import math
+    from autofactorio.engine.rail import RailNetwork
+    from autofactorio.engine.trains import Train, Leg
+
+    net = RailNetwork()
+    net.junction_center = (1e6, 1e6)              # disable the legacy origin throat here
+
+    def edge(ax, ay, bx, by, chain=False):
+        a = net.add_node(ax, ay); b = net.add_node(bx, by)
+        eid = net._add_edge_poly(a, b, [(float(ax), float(ay)), (float(bx), float(by))])
+        blk = net._new_block(); blk.edge_ids.append(eid); blk.length = net.edges[eid].length
+        net.edges[eid].block_id = blk.id
+        blk.chain = chain
+        return eid
+
+    S0 = edge(0, 0, 16, 0, chain=True)            # shared junction run...
+    S1 = edge(16, 0, 32, 0, chain=True)
+    S2 = edge(32, 0, 48, 0, chain=False)          # ...to a plain safe-exit block
+    S_blocks = {net.edges[e].block_id for e in (S0, S1, S2)}
+
+    def approach(theta_deg, d=68):
+        th = math.radians(theta_deg)
+        a = edge(math.cos(th) * d, math.sin(th) * d, math.cos(th) * d * 0.5, math.sin(th) * d * 0.5)
+        b = edge(math.cos(th) * d * 0.5, math.sin(th) * d * 0.5, 0, 0)   # into merge node (0,0)
+        return [Leg([a, b, S0, S1, S2], net.edges[S2].b, ("time", 0.0))]
+
+    trains = {0: Train(0, approach(270), 2, net),
+              1: Train(1, approach(214), 2, net),
+              2: Train(2, approach(326), 2, net)}
+    for i, t in trains.items():
+        t.begin_leg(net, 0)
+        t.head_s = t.leg_len * (i / len(trains))
+
+    dt = 1 / 30.0
+    laps = {i: 0 for i in trains}
+    maxblock = 0.0
+    conflicts = overlaps = 0
+    thr = (balance.ENTITY_WIDTH * 0.9) ** 2
+    for _ in range(int(900 / dt)):
+        cars = {i: [(x, y) for (x, y, _a, _k) in t.car_poses()] for i, t in trains.items()}
+        for i in sorted(trains, key=lambda k: trains[k].traffic_priority()):
+            t = trains[i]
+            t.fuel_seconds = 1e9
+            hard = [c for oi, cs in cars.items() if oi != i for c in cs]
+            mk = t.traffic_priority()
+            yob = [c for oi, ot in trains.items()
+                   if oi != i and ot.traffic_priority() < mk for c in cars[oi]]
+            t.update_movement(dt, net, yob, hard_obstacles=hard)
+            maxblock = max(maxblock, t.blocked_time)
+            if t.state == "waiting":
+                laps[i] += 1
+                t.depart(net)
+        holders = {}
+        for i, t in trains.items():
+            for b in (t.locked & S_blocks):
+                conflicts += 1 if b in holders else 0
+                holders[b] = i
+        ps = [[(x, y) for (x, y, _a, _k) in trains[i].car_poses()] for i in trains]
+        for a in range(len(ps)):
+            for b2 in range(a + 1, len(ps)):
+                if any((ax - bx) ** 2 + (ay - by) ** 2 < thr for ax, ay in ps[a] for bx, by in ps[b2]):
+                    overlaps += 1
+
+    assert conflicts == 0, "two trains held the same junction block (chain mutex failed)"
+    assert overlaps == 0, "trains overlapped in the shared merge"
+    assert maxblock < 40.0, f"a train was stuck {maxblock:.0f}s (deadlock at the merge)"
+    assert all(v >= 8 for v in laps.values()), f"a train was starved: {laps}"
+    lo, hi = min(laps.values()), max(laps.values())
+    assert hi <= lo * 2 + 2, f"unfair service at the shared merge: {laps}"
+
+
 def test_no_two_trains_ever_share_a_block():
     """Collision-safety invariant across the whole network: a block is a mutex, so at
     every instant no two trains may hold the same block. Build several fields (each its
@@ -760,7 +837,7 @@ def test_traffic_priority_loaded_and_recall_beat_empty():
     recall_key = t.traffic_priority()
     assert loaded_key < empty_key                     # loaded gets right of way
     assert recall_key < empty_key                     # recall clears out first
-    assert empty_key[1] == t.id                       # id is the tiebreak field
+    assert empty_key[-1] == t.id                      # id is the final strict tiebreak
 
 
 def test_no_train_collisions_across_a_busy_run():

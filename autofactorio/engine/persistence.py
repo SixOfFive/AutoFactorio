@@ -110,7 +110,8 @@ def save_game(sim, path: str) -> None:
             "edges": {str(e.id): {"a": e.a, "b": e.b, "points": [list(p) for p in e.points],
                                   "length": e.length, "block_id": e.block_id, "built": e.built}
                       for e in net.edges.values()},
-            "blocks": {str(b.id): {"edge_ids": b.edge_ids, "length": b.length}
+            "blocks": {str(b.id): {"edge_ids": b.edge_ids, "length": b.length,
+                                   "chain": b.chain}
                        for b in net.blocks.values()},
             "signals": {str(nid): {"kind": s.kind, "pos": list(s.pos)}
                         for nid, s in net.signals.items()},
@@ -279,7 +280,7 @@ def load_into(sim, path: str) -> None:
                                   [tuple(p) for p in ed["points"]], ed["length"], ed["block_id"],
                                   ed.get("built", True))
         net.out_edges.setdefault(ed["a"], []).append(eid)
-    net.blocks = {int(k): Block(int(k), b["edge_ids"], b["length"], None)
+    net.blocks = {int(k): Block(int(k), b["edge_ids"], b["length"], None, b.get("chain", False))
                   for k, b in data["net"]["blocks"].items()}
     net.signals = {int(k): Signal(int(k), s["kind"], tuple(s["pos"]))
                    for k, s in data["net"]["signals"].items()}

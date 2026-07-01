@@ -170,6 +170,75 @@ class Train:
                 d += 1.0
         return ids
 
+    # ---- chain-signal path reservation ------------------------------------
+    def _chain_run(self, net: RailNetwork, ki: int) -> list[int]:
+        """From interval index `ki` (a CHAIN block), the contiguous run of chain blocks on
+        this leg PLUS the first plain block beyond (the safe exit). This is the atomic path
+        a train must reserve to pass a chain signal - it never stops inside a junction."""
+        run: list[int] = []
+        k = ki
+        n = len(self._intervals)
+        while k < n:
+            bid = self._intervals[k][2]
+            run.append(bid)
+            blk = net.blocks.get(bid)
+            if blk is None or not blk.chain:
+                break                       # included the exit (first plain block)
+            k += 1
+        return run
+
+    def _run_free(self, net: RailNetwork, run) -> bool:
+        for b in run:
+            blk = net.blocks.get(b)
+            if blk is not None and blk.occupant not in (None, self.id):
+                return False
+        return True
+
+    def _reservation_clamp(self, net: RailNetwork, target: float, ds: float) -> float:
+        """How far the head may advance without entering a block it can't hold. Plain next
+        block must be free (else stop MERGE_CLEAR short). A CHAIN next block requires the
+        whole chain run + safe exit to be free, reserved ATOMICALLY - else the train waits
+        before the junction (at the chain signal), holding no junction block, so junctions
+        always drain (deadlock-free). With NO chain blocks this reduces to the old guard."""
+        cur = self._block_at(self.head_s)
+        horizon = min(self.leg_len, self.head_s + max(ds, balance.MERGE_CLEAR))
+        for k, (s, e, bid) in enumerate(self._intervals):
+            if e <= self.head_s + 1e-6 or bid == cur:
+                continue                                  # behind or the current block
+            if s > horizon:
+                break                                     # nothing within reach to clear
+            blk = net.blocks.get(bid)
+            if blk is None:
+                continue
+            if blk.chain:
+                if self._run_free(net, self._chain_run(net, k)):
+                    return target                         # whole path clear: may enter
+                return max(self.head_s, min(target, s - balance.MERGE_CLEAR))
+            if blk.occupant in (None, self.id):
+                continue                                  # free plain block; keep scanning
+            return max(self.head_s, min(target, s - balance.MERGE_CLEAR))
+        return target
+
+    def _resolve_chain_claims(self, net: RailNetwork, body: set[int]) -> set[int]:
+        """Turn the body/reserve-ahead set into an actually-holdable claim: a chain block is
+        only held as part of its WHOLE free run (reserve the entire junction path at once);
+        a chain block whose run isn't free is dropped, so we never hold a partial junction."""
+        if not any(getattr(net.blocks.get(b), "chain", False) for b in body):
+            return body                                   # fast path: no junctions involved
+        result = set(body)
+        for k, (s, e, bid) in enumerate(self._intervals):
+            if bid not in body:
+                continue
+            blk = net.blocks.get(bid)
+            if blk is None or not blk.chain:
+                continue
+            run = self._chain_run(net, k)
+            if self._run_free(net, run):
+                result.update(run)
+            else:
+                result.discard(bid)
+        return result
+
     # ---- movement ---------------------------------------------------------
     def update_movement(self, dt: float, net: RailNetwork, obstacles=None,
                         hard_obstacles=None, ignore_traffic=False) -> None:
@@ -193,19 +262,14 @@ class Train:
         region_waiting = False        # legitimately queued for the home-crossing mutex
         traffic_blocked = False       # stopped by another train's car (possible deadlock)
 
-        # block reservation: don't enter a block another train holds. Look ahead by
-        # MERGE_CLEAR (not just to `target`) so we notice the next block is taken while
-        # still short of it, and STOP that far BEFORE its boundary - leaving the block's
-        # owner clearance to pass a merge/join without our nose grazing its hard guard.
-        cur_block = self._block_at(self.head_s)
-        ahead = min(self.leg_len, self.head_s + max(ds, balance.MERGE_CLEAR))
-        front_block_after = self._block_at(ahead)
-        if front_block_after is not None and front_block_after != cur_block:
-            blk = net.blocks.get(front_block_after)
-            if blk is not None and blk.occupant not in (None, self.id):
-                bstart = self._block_start(front_block_after)
-                target = max(self.head_s, min(target, bstart - balance.MERGE_CLEAR))
-                self.speed = 0.0
+        # block / chain-signal reservation: don't advance into a block we can't hold. A
+        # plain occupied block stops us MERGE_CLEAR short; a CHAIN (junction) block requires
+        # reserving its whole run + safe exit atomically, else we wait before it. With no
+        # chain blocks this is exactly the old single-block merge guard.
+        clamped = self._reservation_clamp(net, target, ds)
+        if clamped < target:
+            target = clamped
+            self.speed = 0.0
 
         # home-cluster interlock: only the mutex holder may move through the central
         # crossing. A train still waiting for the mutex HOLDS ITS POSITION as soon as
@@ -269,8 +333,9 @@ class Train:
         self.head_s = target
 
         # acquire blocks now under the body; only record ones we actually own,
-        # then release any previously-held block no longer under us.
-        body = self._body_blocks()
+        # then release any previously-held block no longer under us. Chain (junction)
+        # blocks are resolved to whole free runs so we never hold a PARTIAL junction.
+        body = self._resolve_chain_claims(net, self._body_blocks())
         owned: set[int] = set()
         for bid in body:
             blk = net.blocks.get(bid)
@@ -297,12 +362,15 @@ class Train:
         self.begin_leg(net, (self.cur_leg + 1) % len(self.legs))
 
     # ---- traffic priority / junction interlock ----------------------------
-    def traffic_priority(self) -> tuple[int, int]:
-        """Sort key (lower = higher priority / right of way). Loaded or recalled
-        trains clear the network first; empty outbound trains yield. Id breaks
-        ties so the order is strict (=> no yield cycles, no deadlock)."""
+    def traffic_priority(self) -> tuple[int, int, int]:
+        """Sort key (lower = higher priority / right of way). Loaded or recalled trains
+        clear the network first; then, WITHIN a class, the LONGEST-BLOCKED train wins (in
+        whole seconds) so trains contending for a shared junction take turns fairly instead
+        of one starving the others; id is the final strict tiebreak (=> a total order, no
+        yield cycles). For a disjoint one-train corridor blocked_time stays ~0, so this
+        reduces to the old (cls, id) and existing behaviour is unchanged."""
         cls = 0 if (self.recall or self.cargo_total() > 0) else 1
-        return (cls, self.id)
+        return (cls, -int(self.blocked_time), self.id)
 
     def _in_region(self, net: RailNetwork) -> bool:
         """True if any of this train's cars is inside its home throat region."""
