@@ -195,6 +195,9 @@ def load_into(sim, path: str) -> None:
         if not p.discovered:
             w._undiscovered.append(p)
     pmap = {p.id: p for p in w.patches}
+    # always keep the home terminal yard clear of fog (also fixes saves made before the
+    # terminal existed, so a resumed game never shows unexplored holes in the concourse)
+    w.reveal(0, 0, balance.TRUNK_HOME_RING + 8)
 
     sim.kills = data.get("kills", 0)
 
