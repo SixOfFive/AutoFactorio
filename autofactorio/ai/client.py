@@ -1,6 +1,6 @@
 """OpenAI-compatible LLM client (stdlib only).
 
-Talks to the LAN "Golden Eye" gateway (or any OpenAI-compatible /v1/chat/completions
+Talks to the LAN UltimateController (uC) (or any OpenAI-compatible /v1/chat/completions
 endpoint). Matches the SimCity_LLM game-AI setup: thinking disabled, replies forced
 to JSON, defensive parsing so a chatty model never crashes the game.
 
@@ -25,7 +25,7 @@ class LLMError(Exception):
 
 @dataclass
 class LLMClient:
-    url: str = "http://192.168.15.3:21345"
+    url: str = "http://192.168.15.3:11434"
     model: str = "qwen3:4b"
     timeout: float = 60.0
     temperature: float = 0.3

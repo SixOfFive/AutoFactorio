@@ -55,7 +55,7 @@ run.py ──► ui/app.py ──► engine/simulation.py ──► engine/{worl
 - **fallback.py** — heuristic director (same output shape): secure iron/copper/
   coal/stone first, then expand to the nearest affordable patch, relieve full
   fields with trains, scale production.
-- **client.py** — stdlib OpenAI-compatible client (Golden Eye gateway), forced
+- **client.py** — stdlib OpenAI-compatible client (UltimateController), forced
   JSON, `/no_think`, defensive JSON extraction.
 - **director.py** — runs the slow LLM call on a daemon thread; **all sim reads/
   writes stay on the main thread**. On gateway error it logs and falls back to

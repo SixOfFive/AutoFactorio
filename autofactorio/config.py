@@ -1,6 +1,6 @@
 """Runtime configuration: LLM endpoint, display, world seed.
 
-Defaults match the SimCity_LLM game-AI setup (Golden Eye gateway). A `config.json`
+Defaults match the SimCity_LLM game-AI setup (UltimateController, .3:11434). A `config.json`
 next to the repo root (gitignored) can override any field; env vars win over that.
 """
 
@@ -32,7 +32,7 @@ def _env(key: str, default):
 
 @dataclass
 class LLMConfig:
-    url: str = "http://192.168.15.3:21345"
+    url: str = "http://192.168.15.3:11434"
     model: str = "qwen3:4b"
     enabled: bool = True
     timeout_seconds: float = 60.0

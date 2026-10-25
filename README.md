@@ -70,7 +70,7 @@ Useful flags:
 The director speaks the **OpenAI-compatible Chat Completions API** — it sends `POST {url}/v1/chat/completions` with a forced-JSON `response_format`. That means it works with any server exposing that API, including:
 
 - **Ollama** — which serves an OpenAI-compatible endpoint at `http://localhost:11434/v1` (use `url: "http://localhost:11434"`, e.g. `ollama pull qwen3:4b`),
-- **llama.cpp** `server`, **LM Studio**, **vLLM**, **text-generation-webui**, the LAN *Golden Eye* gateway (the default — itself Ollama-backed), or **OpenAI** itself.
+- **llama.cpp** `server`, **LM Studio**, **vLLM**, **text-generation-webui**, the LAN *UltimateController* (uC, the default — routes by model name), or **OpenAI** itself.
 
 > Set `url` to the **base** address only — the client appends `/v1/chat/completions` for you. So for Ollama it's `http://localhost:11434`, **not** `.../v1`.
 
@@ -79,7 +79,7 @@ To point it at a different server or model, set the **location (`url`)** and **`
 **`config.json`** — copy `config.example.json` to `config.json` (gitignored) and edit:
 
 ```json
-{ "llm": { "url": "http://192.168.15.3:21345", "model": "qwen3:4b", "enabled": true } }
+{ "llm": { "url": "http://192.168.15.3:11434", "model": "qwen3:4b", "enabled": true } }
 ```
 
 **Environment variables** (handy for a one-off, and they win over `config.json`):
@@ -115,7 +115,7 @@ docs/ARCHITECTURE.md    design notes
 - **Tech research**: the factory makes science from surplus; the director researches
   levels that compound the economy (drill output, train speed, wagon capacity,
   smelting speed, rail cost, +explorer robots up to 3).
-- LLM director (Golden Eye) with an instant heuristic fallback.
+- LLM director (UltimateController) with an instant heuristic fallback.
 - Collision-free one-way directed rail (two parallel lanes + one-train-per-block mutex).
 - **Robots (up to 3)** are the base's hands: they **build new fields** (drive out and
   lay the planned/ghosted track + drills before the train runs), **tear down depleted
